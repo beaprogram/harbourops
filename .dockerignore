@@ -1,0 +1,13 @@
+.git
+.github
+.env
+**/node_modules
+**/bin
+**/obj
+**/dist
+**/TestResults
+backend/HarbourOps.Tests
+backend/HarbourOps.Api/wwwroot
+e2e
+docs
+*.md

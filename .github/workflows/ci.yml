@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  backend:
+    name: Backend (build, migrations check, xUnit + PostgreSQL)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore (locked)
+        run: dotnet restore backend/HarbourOps.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build backend/HarbourOps.slnx --no-restore -c Release
+
+      - name: Fail if the EF model changed without a migration
+        env:
+          # Design-time only; no database connection is opened.
+          ConnectionStrings__Default: Host=localhost;Database=design_time_only
+        run: |
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes --project backend/HarbourOps.Api --no-build --configuration Release
+
+      - name: Test (unit + Testcontainers PostgreSQL 18)
+        run: dotnet test --solution backend/HarbourOps.slnx --no-build -c Release
+
+  frontend:
+    name: Frontend (lint, types, Vitest, build)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    name: End-to-end (Docker Compose + Playwright)
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create a throwaway .env for CI
+        run: |
+          cp .env.example .env
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+
+      - name: Start the stack
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8088/health/ready && exit 0
+            sleep 2
+          done
+          docker compose logs app
+          exit 1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
+
+      - name: App logs
+        if: failure()
+        run: docker compose logs app
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

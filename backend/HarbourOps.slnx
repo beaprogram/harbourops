@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="HarbourOps.Api/HarbourOps.Api.csproj" />
+  <Project Path="HarbourOps.Tests/HarbourOps.Tests.csproj" />
+</Solution>

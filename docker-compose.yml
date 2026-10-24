@@ -1,0 +1,43 @@
+# Local stack: PostgreSQL 18 + the HarbourOps app (API and built frontend on one origin).
+#   cp .env.example .env
+#   docker compose up --build        -> http://localhost:8088
+# For backend/frontend development you can start only the database:
+#   docker compose up -d db          -> localhost:5433
+name: harbourops
+
+services:
+  db:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: harbourops
+      POSTGRES_USER: harbourops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example)}
+    ports:
+      # Bound to localhost only; 5433 avoids clashing with a locally installed PostgreSQL on 5432.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/18/docker, so mount the parent.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harbourops -d harbourops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # "Demo" loads appsettings.Demo.json: migrations on startup + fictional demo accounts.
+      ASPNETCORE_ENVIRONMENT: Demo
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=harbourops;Username=harbourops;Password=${POSTGRES_PASSWORD};GSS Encryption Mode=Disable"
+      DemoData__Password: ${DEMO_PASSWORD:?Set DEMO_PASSWORD in .env (copy .env.example)}
+      # Local HTTP only. Real deployments use HTTPS and keep the default "Always".
+      Security__CookieSecurePolicy: SameAsRequest
+    ports:
+      - "127.0.0.1:8088:8080"
+
+volumes:
+  db-data:
