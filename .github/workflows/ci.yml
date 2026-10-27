@@ -128,6 +128,29 @@ jobs:
         working-directory: e2e
         run: npx playwright test
 
+      # A failure report is downloadable from this public repository. Its viewer is Playwright code (Apache-2.0)
+      # and its traces can contain the axe-core engine (MPL-2.0), injected without its licence header, so the
+      # report carries both licences and axe-core's source location (THIRD-PARTY-NOTICES.md).
+      - name: Add licence notices to the Playwright report
+        if: failure()
+        working-directory: e2e
+        run: |
+          [ -d node_modules/axe-core ] || exit 0
+          out=playwright-report/third-party-licenses
+          mkdir -p "$out"
+          cp node_modules/axe-core/LICENSE "$out/axe-core-LICENSE.txt"
+          cp node_modules/axe-core/LICENSE-3RD-PARTY.txt "$out/axe-core-LICENSE-3RD-PARTY.txt"
+          for f in LICENSE NOTICE ThirdPartyNotices.txt; do cp "node_modules/playwright-core/$f" "$out/playwright-core-$f"; done
+          version=$(node -p "require('./node_modules/axe-core/package.json').version")
+          {
+            echo "Traces in this report can contain axe-core $version (Copyright Deque Systems, Inc.), injected unmodified"
+            echo "into the browser under test. axe-core is licensed under the Mozilla Public License 2.0"
+            echo "(axe-core-LICENSE.txt). Its source code: https://github.com/dequelabs/axe-core/tree/v$version"
+            echo
+            echo "The report viewer is Playwright (Apache-2.0, Copyright Microsoft Corporation):"
+            echo "playwright-core-LICENSE, playwright-core-NOTICE, playwright-core-ThirdPartyNotices.txt."
+          } > "$out/README.txt"
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v7

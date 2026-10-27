@@ -233,4 +233,4 @@ docs/                        Architecture, decisions, deployment runbook, access
   - [List-query benchmark](docs/benchmarks/list-query-indexes/README.md)
   - [Photo memory benchmark](docs/benchmarks/photo-memory/README.md)
 - **Contributors and AI assistants:** [CLAUDE.md](CLAUDE.md)
-- **Licences:** [Third-party notices](THIRD-PARTY-NOTICES.md). The hosted app also serves `/third-party-licenses.txt` for the bundled JavaScript. This repository's own licence has not been chosen yet.
+- **Licence:** [MIT](LICENSE). Third-party components are listed in [Third-party notices](THIRD-PARTY-NOTICES.md), and the hosted app also serves `/third-party-licenses.txt` for the bundled JavaScript.

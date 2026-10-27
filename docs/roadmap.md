@@ -100,7 +100,7 @@ Completed work is listed separately from planned work. Every "Done" row names th
    - Alerts on readiness and errors.
    - A global rate limit (Front Door or a WAF).
 3. **Accessibility with people.** Run the screen-reader checklist with VoiceOver and NVDA, and fix what it finds.
-4. **Presentation.** A short walkthrough video, and a licence file for the repository.
+4. **Presentation.** A short walkthrough video.
 
 ## Later milestones
 

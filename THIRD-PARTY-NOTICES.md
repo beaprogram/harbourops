@@ -1,8 +1,6 @@
 # Third-party notices
 
-HarbourOps uses open-source components under permissive licences. This file records what is distributed where and how each licence's notice requirement is met. Licence texts are not copied here, because they ship with the components themselves. It was reviewed on 2026-10-26 from each package's own metadata.
-
-**The repository's own licence** has not been chosen yet. Until a `LICENSE` file is added, no licence is granted for this project's own code.
+HarbourOps' own code is released under the [MIT License](LICENSE), Copyright (c) 2026 Arup Halder. It uses open-source components under their own licences. This file records what is distributed where and how each licence's notice requirement is met. Licence texts are not copied here, because they ship with the components themselves. It was reviewed on 2026-10-27 from each package's own metadata and bundled licence files (the npm lockfiles and installed packages, and each NuGet package's `.nuspec`).
 
 ## What this repository contains
 
@@ -30,24 +28,49 @@ The production build bundles these packages. Vite writes their licence texts to 
 
 | Component | Licence | Notice |
 | --- | --- | --- |
-| .NET 10 runtime, ASP.NET Core, EF Core and other `Microsoft.*` packages | MIT | Package metadata. Base image `mcr.microsoft.com/dotnet/aspnet:10.0.13-noble-chiseled-extra` (Microsoft's image terms) |
+| .NET 10 runtime, ASP.NET Core, EF Core and other `Microsoft.*` and `System.*` packages | MIT | Package metadata. Base image `mcr.microsoft.com/dotnet/aspnet:10.0.13-noble-chiseled-extra` (Microsoft's image terms) |
 | Npgsql.EntityFrameworkCore.PostgreSQL (and Npgsql) | PostgreSQL License | Package metadata |
 | SkiaSharp, SkiaSharp.NativeAssets.Linux.NoDependencies | MIT. Bundled Skia and codec code is BSD-3-Clause and similar | `/app/licenses/SkiaSharp-LICENSE.txt`, `/app/licenses/SkiaSharp-THIRD-PARTY-NOTICES.txt` |
 | Azure.Storage.Blobs, Azure.Identity, Azure.Core, Azure.Extensions.AspNetCore.DataProtection.Keys, Azure.Security.KeyVault.Keys, Microsoft.Identity.Client | MIT | Package metadata |
 | Apache.Arrow (dependency of Azure.Storage.Blobs) | Apache-2.0 (the package has no NOTICE file) | `/app/licenses/Apache.Arrow-LICENSE.txt` |
 | Scalar.AspNetCore (API reference, Development only) | MIT | Package metadata |
 
-## Development and test tools (not distributed)
+## Development, build, and test tools
+
+These run on a developer's machine or a CI runner. npm and NuGet download them at the locked versions into git-ignored folders. None is committed to this repository, copied into the container image (`.dockerignore` excludes `e2e/` and every `node_modules`), or bundled into the web app. The one exception, CI failure reports, is covered below.
 
 | Tool | Licence |
 | --- | --- |
 | xunit.v3 | Apache-2.0 |
 | Testcontainers (.NET), Microsoft.AspNetCore.Mvc.Testing, Microsoft.Extensions.TimeProvider.Testing | MIT |
 | TypeScript | Apache-2.0 |
-| @playwright/test | Apache-2.0 |
-| @axe-core/playwright | MPL-2.0, used unmodified. MPL obligations apply only to modified MPL files |
-| Vite, Vitest, ESLint, Testing Library, jsdom, and the other frontend dev dependencies | MIT |
+| @playwright/test, playwright, playwright-core 1.64.1 | Apache-2.0 |
+| @axe-core/playwright 4.14.0 and axe-core 4.14.0 (accessibility scans) | MPL-2.0, see below |
+| lightningcss 1.32.0 and 1.33.0 (CSS transformer that Vite and Tailwind run during the build) | MPL-2.0, see below |
+| caniuse-lite (browser-support data that Babel's browserslist reads inside the ESLint React Hooks plugin) | CC-BY-4.0. Read during linting; none of it is in any build output |
+| Vite, Vitest, ESLint, Testing Library, jsdom, and the other frontend dev dependencies | MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, BlueOak-1.0.0, CC0-1.0, or MIT-0 |
 | Container images used in tests: `postgres:18.6-alpine` (PostgreSQL License) and `mcr.microsoft.com/azure-storage/azurite:3.37.0` (MIT) | As stated |
+
+### The MPL-2.0 components
+
+MPL-2.0 is a **file-level copyleft** licence. Its conditions attach to the covered files themselves, modified or not. Whoever distributes them must:
+
+- keep them under MPL-2.0 with their notices intact;
+- tell recipients the licence applies;
+- make their source code available.
+
+Changes to those files must also be released under MPL-2.0. The licence does not reach separate files that are combined with them (a "Larger Work"), so it places no conditions on HarbourOps' own code. HarbourOps uses all of these components unmodified.
+
+How each one actually reaches other people (checked on 2026-10-27):
+
+- **axe-core and @axe-core/playwright** are installed by npm from the registry into `e2e/node_modules`. During a scan, @axe-core/playwright injects axe-core's engine into the browser under test as the text of its unminified `axe.js` function. That text does **not** include the file's licence header.
+- **CI failure reports distribute it.** When an end-to-end test fails, CI uploads the Playwright report (kept 7 days). Because this repository is public, anyone signed in to GitHub can download that report. Its traces record the injected engine: a traced local axe scan held four 1.48 MB copies of it and no licence notice. So before uploading, `ci.yml` adds a `third-party-licenses/` folder to the report containing:
+  - axe-core's `LICENSE` and `LICENSE-3RD-PARTY.txt`;
+  - a README naming the version and its source (`https://github.com/dequelabs/axe-core/tree/v<version>`);
+  - Playwright's `LICENSE`, `NOTICE`, and `ThirdPartyNotices.txt`, because the report's viewer is Playwright code.
+
+  Passing runs upload nothing.
+- **lightningcss** runs only during `npm run build`. Its output is HarbourOps' own CSS, which contains none of its code, so nothing of it is distributed.
 
 ## Keeping this current
 
@@ -55,3 +78,4 @@ When adding a dependency:
 1. Check its licence (see [CLAUDE.md](CLAUDE.md)).
 2. If it is bundled into the frontend, check that it appears in the generated `third-party-licenses.txt`.
 3. If it ships native code or a NOTICE file in the container, copy that file into `/app/licenses` in the `Dockerfile`.
+4. If its code can end up in a CI artifact (as the injected axe-core engine does in Playwright traces), add its licence to the notice step in `ci.yml`.

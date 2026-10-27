@@ -42,7 +42,8 @@ What has been verified for the first public release, and what is still outstandi
 | 6 | Memory on Azure B1 | Watch the plan's memory metric under a few demo sessions; compare with the 496 MiB local peak |
 | 7 | Screen readers | Run the checklist in [accessibility.md](accessibility.md) with VoiceOver and NVDA |
 | 8 | README live link | Add only after items 3 and 4 pass |
-| 9 | Licence file | Decide on a licence for the repository |
+
+The repository licence was decided on 2026-10-27: [MIT](../LICENSE), Copyright (c) 2026 Arup Halder. Third-party obligations are in [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
 
 ## Release-day order
 
@@ -50,4 +51,4 @@ What has been verified for the first public release, and what is still outstandi
 2. Provision (item 2) and create the database role.
 3. Deploy (item 3) and smoke-test (items 4–6).
 4. Add the live link to the README.
-5. If anything fails, roll back by pointing the web app at the previous image tag (deployment §13). Migrations are additive, so the previous image still runs.
+5. If anything fails, roll back by pointing the web app at the previous image digest (deployment §13). Migrations are additive, so the previous image still runs.

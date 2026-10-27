@@ -350,7 +350,7 @@ Instead of weakening that limit for tests, `e2e/global-setup.ts` signs each demo
 | Option | Licence | Verdict |
 | --- | --- | --- |
 | SkiaSharp | MIT; bundled Skia and codec notices are BSD-3-Clause and similar permissive licences | **Chosen.** Unconditional: fine for a public portfolio, for an employer reusing the code, and for commercial use |
-| SixLabors.ImageSharp 4.1.3 | Six Labors Split License | Apache-2.0 only for open-source or source-available projects, organizations under US$1M revenue, non-profits, or transitive use; otherwise a paid licence. This repository has no licence file yet, so whether it qualifies would depend on facts outside the code |
+| SixLabors.ImageSharp 4.1.3 | Six Labors Split License | Apache-2.0 only for open-source or source-available projects, organizations under US$1M revenue, non-profits, or transitive use; otherwise a paid licence. When this was decided the repository had no licence file, so whether it qualified depended on facts outside the code |
 | Magick.NET (ImageMagick) | Apache-2.0 | Permissive, but decodes dozens of formats with a long history of security issues. Far more attack surface than two formats need |
 | NetVips (libvips) | MIT wrapper; libvips itself is LGPL-2.1 | Workable, but needs LGPL compliance for the native library |
 
