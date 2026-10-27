@@ -36,8 +36,13 @@ services:
       DemoData__Password: ${DEMO_PASSWORD:?Set DEMO_PASSWORD in .env (copy .env.example)}
       # Local HTTP only. Real deployments use HTTPS and keep the default "Always".
       Security__CookieSecurePolicy: SameAsRequest
+      # Private photo storage on a named volume: outside the web root, never served as static files.
+      Attachments__Storage__LocalPath: /var/lib/harbourops/attachments
+    volumes:
+      - attachments-data:/var/lib/harbourops/attachments
     ports:
       - "127.0.0.1:8088:8080"
 
 volumes:
   db-data:
+  attachments-data:

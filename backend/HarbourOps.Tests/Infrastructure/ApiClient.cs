@@ -70,6 +70,36 @@ public sealed class ApiClient(HttpClient http) : IDisposable
         return await http.SendAsync(request);
     }
 
+    /// <summary>Uploads one file as multipart/form-data (field "file"), like the browser's file input.</summary>
+    public async Task<HttpResponseMessage> UploadAsync(
+        string url, byte[] content, string fileName = "photo.jpg", string contentType = "image/jpeg", bool withAntiforgery = true)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(content);
+        file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+        form.Add(file, "file", fileName);
+        return await SendAsync(url, form, withAntiforgery);
+    }
+
+    /// <summary>Posts a hand-built body (for malformed or unusual multipart requests).</summary>
+    public async Task<HttpResponseMessage> SendAsync(string url, HttpContent content, bool withAntiforgery = true)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+        if (withAntiforgery && AntiforgeryToken is not null)
+        {
+            request.Headers.Add("X-XSRF-TOKEN", AntiforgeryToken);
+        }
+
+        return await http.SendAsync(request);
+    }
+
+    public async Task<byte[]> GetBytesAsync(string url)
+    {
+        var response = await http.GetAsync(url);
+        await EnsureSuccessAsync(response);
+        return await response.Content.ReadAsByteArrayAsync();
+    }
+
     public async Task<T> PostJsonAsync<T>(string url, object? body)
     {
         var response = await PostAsync(url, body);

@@ -1,4 +1,7 @@
 using HarbourOps.Api.Common;
+using HarbourOps.Api.Features.Demo.Sandbox;
+using HarbourOps.Api.Features.WorkOrders.Export;
+using Microsoft.Extensions.Options;
 
 namespace HarbourOps.Api.Features.WorkOrders;
 
@@ -20,9 +23,40 @@ public static class WorkOrderEndpoints
 
         group.MapGet("/", ListAsync)
             .WithName("ListWorkOrders")
-            .WithSummary("List work orders visible to the current user, newest first.")
+            .WithSummary("Search, filter, sort, and page the work orders visible to the current user.")
             .Produces<PagedResponse<WorkOrderListItem>>()
             .ProducesValidationProblem();
+
+        group.MapGet("/export", async ([AsParameters] WorkOrderListParameters parameters, CurrentUser user,
+                WorkOrderExportService exporter, DemoQuotas demoQuotas, IOptions<ExportOptions> export, CancellationToken ct) =>
+            {
+                // Same filter parsing as the list; paging parameters are ignored because the export
+                // includes every matching row (up to the configured limit).
+                var filter = WorkOrderFilter.TryParse(parameters);
+                if (!filter.IsSuccess)
+                {
+                    return filter.Failure!.ToProblem();
+                }
+
+                if (user.IsManager && await demoQuotas.TryUseAsync(user, DemoQuota.Export, ct) is { } limited)
+                {
+                    return limited.ToProblem();
+                }
+
+                return await exporter.ExportAsync(user, filter.Value!, export.Value.MaxRows, ct);
+            })
+            .WithName("ExportWorkOrders")
+            .WithSummary("Manager: download every matching work order as CSV (same filters and order as the list).")
+            .Produces(StatusCodes.Status200OK, contentType: "text/csv")
+            .ProducesValidationProblem()
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status422UnprocessableEntity);
+
+        group.MapGet("/filter-options", async (CurrentUser user, WorkOrderService service, IOptions<ExportOptions> export, CancellationToken ct) =>
+                TypedResults.Ok(await service.GetFilterOptionsAsync(user, export.Value.MaxRows, ct)))
+            .WithName("GetWorkOrderFilterOptions")
+            .WithSummary("Property and technician choices for the list filters, limited to what the role may see.")
+            .Produces<WorkOrderFilterOptions>();
 
         group.MapPost("/", async (CreateWorkOrderRequest request, CurrentUser user, WorkOrderService service, CancellationToken ct) =>
             {
@@ -95,42 +129,32 @@ public static class WorkOrderEndpoints
     }
 
     private static async Task<IResult> ListAsync(
-        int? page, int? pageSize, string[]? status, CurrentUser user, WorkOrderService service, CancellationToken ct)
+        [AsParameters] WorkOrderListParameters parameters, CurrentUser user, WorkOrderService service, CancellationToken ct)
     {
-        var errors = new ValidationErrors();
-        var pageNumber = page ?? 1;
-        var size = pageSize ?? DefaultPageSize;
-        if (pageNumber < 1)
+        var filter = WorkOrderFilter.TryParse(parameters);
+        var paging = WorkOrderFilter.TryParsePaging(parameters, DefaultPageSize, MaxPageSize);
+        if (MergeFailures(filter.Failure, paging.Failure) is { } failure)
         {
-            errors.Add("page", "Page must be 1 or greater.");
+            return failure.ToProblem();
         }
 
-        if (size is < 1 or > MaxPageSize)
+        var (page, pageSize) = paging.Value;
+        return TypedResults.Ok(await service.ListAsync(user, filter.Value!, page, pageSize, ct));
+    }
+
+    /// <summary>Reports filter and paging problems together, so the client sees every invalid field at once.</summary>
+    internal static Failure? MergeFailures(params Failure?[] failures)
+    {
+        var present = failures.OfType<Failure>().ToList();
+        if (present.Count == 0)
         {
-            errors.Add("pageSize", $"Page size must be between 1 and {MaxPageSize}.");
+            return null;
         }
 
-        var statuses = new List<WorkOrderStatus>();
-        foreach (var value in status ?? [])
-        {
-            // Enum.TryParse also accepts numbers like "7", so require a defined name.
-            if (Enum.TryParse<WorkOrderStatus>(value, ignoreCase: true, out var parsed)
-                && Enum.IsDefined(parsed) && !int.TryParse(value, out _))
-            {
-                statuses.Add(parsed);
-            }
-            else
-            {
-                errors.Add("status", $"'{value}' is not a valid status.");
-            }
-        }
-
-        if (errors.HasErrors)
-        {
-            return errors.ToFailure().ToProblem();
-        }
-
-        var result = await service.ListAsync(user, new WorkOrderListQuery(pageNumber, size, statuses), ct);
-        return TypedResults.Ok(result);
+        var errors = present
+            .SelectMany(f => f.Errors ?? new Dictionary<string, string[]>())
+            .GroupBy(e => e.Key)
+            .ToDictionary(g => g.Key, g => g.SelectMany(e => e.Value).ToArray());
+        return Failure.Validation(errors);
     }
 }

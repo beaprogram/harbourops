@@ -16,14 +16,31 @@ public enum FailureKind
 
     /// <summary>The caller's copy is out of date; someone else changed the record first (409).</summary>
     Conflict,
+
+    /// <summary>The request body is larger than allowed (413).</summary>
+    PayloadTooLarge,
+
+    /// <summary>The content is not a supported type, whatever its name or declared Content-Type says (415).</summary>
+    UnsupportedMediaType,
+
+    /// <summary>A dependency such as photo storage is temporarily unavailable (503).</summary>
+    Unavailable,
+
+    /// <summary>The caller's session no longer authorizes this, for example an ended demo sandbox (401).</summary>
+    Unauthenticated,
 }
 
-/// <summary>An expected business failure. Unexpected failures are exceptions instead.</summary>
-public sealed record Failure(FailureKind Kind, string Message, IReadOnlyDictionary<string, string[]>? Errors = null)
+/// <summary>
+/// An expected business failure. Unexpected failures are exceptions instead.
+/// <paramref name="Code"/> overrides the default machine-readable Problem Details code for the kind
+/// (for example "work_order_closed" instead of "invalid_transition").
+/// </summary>
+public sealed record Failure(
+    FailureKind Kind, string Message, IReadOnlyDictionary<string, string[]>? Errors = null, string? Code = null)
 {
     public static Failure NotFound(string message) => new(FailureKind.NotFound, message);
     public static Failure Forbidden(string message) => new(FailureKind.Forbidden, message);
-    public static Failure InvalidState(string message) => new(FailureKind.InvalidState, message);
+    public static Failure InvalidState(string message, string? code = null) => new(FailureKind.InvalidState, message, Code: code);
     public static Failure Conflict(string message) => new(FailureKind.Conflict, message);
 
     public static Failure Validation(string field, string message) =>

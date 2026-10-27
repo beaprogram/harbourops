@@ -1,13 +1,17 @@
 import type { ReactNode } from 'react'
 import { Link, useLocation, useParams } from 'react-router'
 import { ApiError } from '../../api/client'
-import { OverdueBadge, PriorityBadge, StatusBadge } from '../../components/Badges'
+import { PriorityBadge, StatusBadge } from '../../components/Badges'
 import { Button } from '../../components/Button'
 import { Alert, LoadingState } from '../../components/Feedback'
 import { categoryLabels, formatDateTime, workOrderReference } from '../../lib/format'
 import { ActivityTimeline } from './ActivityTimeline'
+import { AttachmentsSection } from './AttachmentsSection'
+import { CommentsSection } from './CommentsSection'
+import { DeadlineBadge, DeadlineValue } from './Deadline'
 import { WorkOrderActions } from './WorkOrderActions'
 import { useWorkOrder, useWorkOrderActivity } from './workOrders'
+import { usePageTitle } from '../../lib/usePageTitle'
 
 export function WorkOrderDetailPage() {
   const { id = '' } = useParams()
@@ -15,6 +19,7 @@ export function WorkOrderDetailPage() {
   const flash = (location.state as { flash?: string } | null)?.flash
   const workOrder = useWorkOrder(id)
   const activity = useWorkOrderActivity(id)
+  usePageTitle(workOrder.data ? `${workOrderReference(workOrder.data.number)}: ${workOrder.data.title}` : 'Work order')
 
   if (workOrder.isPending) return <LoadingState label="Loading work order…" />
 
@@ -62,11 +67,11 @@ export function WorkOrderDetailPage() {
         <div className="flex flex-wrap gap-2">
           <StatusBadge status={wo.status} />
           <PriorityBadge priority={wo.priority} />
-          {wo.isOverdue && <OverdueBadge />}
+          <DeadlineBadge item={wo} />
         </div>
       </header>
 
-      {/* Mobile order: details, actions, activity. Desktop: actions in a sidebar beside both. */}
+      {/* Mobile order: details, actions, comments, activity. Desktop: actions in a sidebar. */}
       <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
         <div className="space-y-6 lg:col-span-2">
           <section aria-labelledby="details-heading" className="rounded-xl border border-slate-200 bg-white p-6 shadow-xs">
@@ -86,8 +91,7 @@ export function WorkOrderDetailPage() {
               <Detail label="Technician">{wo.assignedTechnician?.displayName ?? 'Not assigned yet'}</Detail>
               <Detail label="Submitted">{formatDateTime(wo.createdAt)}</Detail>
               <Detail label="Due">
-                {formatDateTime(wo.dueAt)}
-                {wo.isOverdue && <span className="block font-medium text-red-700">Past due</span>}
+                <DeadlineValue item={wo} asOf={wo.asOf} />
               </Detail>
               <Detail label="Last updated">{formatDateTime(wo.updatedAt)}</Detail>
               {wo.closedAt && <Detail label="Closed">{formatDateTime(wo.closedAt)}</Detail>}
@@ -109,7 +113,9 @@ export function WorkOrderDetailPage() {
           <WorkOrderActions workOrder={wo} />
         </aside>
 
-        <div className="lg:col-span-2">
+        <div className="space-y-6 lg:col-span-2">
+          <AttachmentsSection workOrder={wo} />
+          <CommentsSection workOrder={wo} />
           <ActivityTimeline events={activity.data} isPending={activity.isPending} error={activity.error} />
         </div>
       </div>

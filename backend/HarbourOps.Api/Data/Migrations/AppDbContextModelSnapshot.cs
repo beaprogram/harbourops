@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using NpgsqlTypes;
 
 #nullable disable
 
@@ -21,6 +22,92 @@ namespace HarbourOps.Api.Data.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("HarbourOps.Api.Features.Attachments.Attachment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int>("Height")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("MediaType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("PreviewHeight")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("PreviewSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PreviewStorageKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int>("PreviewWidth")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("SourceMediaType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("UploadedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UploadedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Width")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("WorkOrderId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PreviewStorageKey")
+                        .IsUnique();
+
+                    b.HasIndex("StorageKey")
+                        .IsUnique();
+
+                    b.HasIndex("OrganizationId", "UploadedById");
+
+                    b.HasIndex("OrganizationId", "WorkOrderId", "UploadedAt", "Id")
+                        .HasDatabaseName("IX_Attachments_Org_WorkOrder_UploadedAt_Id");
+
+                    b.ToTable("Attachments", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Attachments_MediaType", "\"MediaType\" = 'image/jpeg'");
+
+                            t.HasCheckConstraint("CK_Attachments_Sizes", "\"SizeBytes\" > 0 AND \"Width\" > 0 AND \"Height\" > 0 AND \"PreviewSizeBytes\" > 0 AND \"PreviewWidth\" > 0 AND \"PreviewHeight\" > 0");
+
+                            t.HasCheckConstraint("CK_Attachments_SourceMediaType", "\"SourceMediaType\" IN ('image/jpeg', 'image/png')");
+
+                            t.HasCheckConstraint("CK_Attachments_StorageKeys", "\"StorageKey\" ~ '^[0-9a-f]{32}$' AND \"PreviewStorageKey\" ~ '^[0-9a-f]{32}$' AND \"StorageKey\" <> \"PreviewStorageKey\"");
+                        });
+                });
 
             modelBuilder.Entity("HarbourOps.Api.Features.Comments.Comment", b =>
                 {
@@ -49,10 +136,115 @@ namespace HarbourOps.Api.Data.Migrations
 
                     b.HasIndex("OrganizationId", "AuthorId");
 
-                    b.HasIndex("OrganizationId", "WorkOrderId", "CreatedAt")
-                        .HasDatabaseName("IX_Comments_Org_WorkOrder_CreatedAt");
+                    b.HasIndex("OrganizationId", "WorkOrderId", "CreatedAt", "Id")
+                        .HasDatabaseName("IX_Comments_Org_WorkOrder_CreatedAt_Id");
 
-                    b.ToTable("Comments", (string)null);
+                    b.ToTable("Comments", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Comments_BodyNotBlank", "length(btrim(\"Body\", E' \\t\\n\\r')) > 0");
+                        });
+                });
+
+            modelBuilder.Entity("HarbourOps.Api.Features.Demo.Sandbox.DemoPersona", b =>
+                {
+                    b.Property<Guid>("SandboxId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Key")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("SandboxId", "Key");
+
+                    b.HasIndex("UserId")
+                        .IsUnique();
+
+                    b.HasIndex("OrganizationId", "UserId");
+
+                    b.ToTable("DemoPersonas", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_DemoPersonas_Key", "\"Key\" IN ('manager', 'technician', 'requester', 'otherManager')");
+                        });
+                });
+
+            modelBuilder.Entity("HarbourOps.Api.Features.Demo.Sandbox.DemoSandbox", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ActionCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("AttachmentCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("CleanedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("CommentCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("CredentialHash")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ExportCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RevokedReason")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<long>("StoredBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("UploadCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("WorkOrderCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("IX_DemoSandboxes_Uncleaned")
+                        .HasFilter("\"CleanedAt\" IS NULL");
+
+                    b.HasIndex("CredentialHash")
+                        .IsUnique();
+
+                    b.ToTable("DemoSandboxes", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_DemoSandboxes_Cleaned", "\"CleanedAt\" IS NULL OR \"RevokedAt\" IS NOT NULL");
+
+                            t.HasCheckConstraint("CK_DemoSandboxes_Counters", "\"WorkOrderCount\" >= 0 AND \"CommentCount\" >= 0 AND \"ActionCount\" >= 0 AND \"UploadCount\" >= 0 AND \"AttachmentCount\" >= 0 AND \"StoredBytes\" >= 0 AND \"ExportCount\" >= 0");
+
+                            t.HasCheckConstraint("CK_DemoSandboxes_CredentialHash", "octet_length(\"CredentialHash\") = 32");
+
+                            t.HasCheckConstraint("CK_DemoSandboxes_Lifetime", "\"ExpiresAt\" > \"CreatedAt\"");
+
+                            t.HasCheckConstraint("CK_DemoSandboxes_RevokedReason", "\"RevokedReason\" IS NULL OR \"RevokedReason\" IN ('expired', 'reset', 'ended', 'failed', 'disabled')");
+                        });
                 });
 
             modelBuilder.Entity("HarbourOps.Api.Features.Organizations.Organization", b =>
@@ -63,6 +255,9 @@ namespace HarbourOps.Api.Data.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DemoSandboxId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -75,6 +270,8 @@ namespace HarbourOps.Api.Data.Migrations
                         .HasColumnType("character varying(60)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DemoSandboxId");
 
                     b.HasIndex("Slug")
                         .IsUnique();
@@ -308,6 +505,13 @@ namespace HarbourOps.Api.Data.Migrations
                     b.Property<DateTimeOffset?>("ResolvedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<NpgsqlTsVector>("SearchVector")
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("tsvector")
+                        .HasAnnotation("Npgsql:TsVectorConfig", "english")
+                        .HasAnnotation("Npgsql:TsVectorProperties", new[] { "Title", "Description" });
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -332,6 +536,11 @@ namespace HarbourOps.Api.Data.Migrations
                     b.HasIndex("Number")
                         .IsUnique();
 
+                    b.HasIndex("SearchVector")
+                        .HasDatabaseName("IX_WorkOrders_SearchVector");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("SearchVector"), "GIN");
+
                     b.HasIndex("OrganizationId", "DueAt")
                         .HasDatabaseName("IX_WorkOrders_Org_DueAt_Open")
                         .HasFilter("\"Status\" IN ('New', 'Assigned', 'InProgress')");
@@ -350,6 +559,10 @@ namespace HarbourOps.Api.Data.Migrations
 
                     b.HasIndex("OrganizationId", "RequesterId", "CreatedAt")
                         .HasDatabaseName("IX_WorkOrders_Org_Requester_CreatedAt");
+
+                    b.HasIndex("OrganizationId", "UpdatedAt", "Id")
+                        .IsDescending(false, true, true)
+                        .HasDatabaseName("IX_WorkOrders_Org_UpdatedAt");
 
                     b.ToTable("WorkOrders", null, t =>
                         {
@@ -452,6 +665,27 @@ namespace HarbourOps.Api.Data.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("HarbourOps.Api.Features.Attachments.Attachment", b =>
+                {
+                    b.HasOne("HarbourOps.Api.Features.Users.ApplicationUser", "UploadedBy")
+                        .WithMany()
+                        .HasForeignKey("OrganizationId", "UploadedById")
+                        .HasPrincipalKey("OrganizationId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HarbourOps.Api.Features.WorkOrders.WorkOrder", "WorkOrder")
+                        .WithMany()
+                        .HasForeignKey("OrganizationId", "WorkOrderId")
+                        .HasPrincipalKey("OrganizationId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("UploadedBy");
+
+                    b.Navigation("WorkOrder");
+                });
+
             modelBuilder.Entity("HarbourOps.Api.Features.Comments.Comment", b =>
                 {
                     b.HasOne("HarbourOps.Api.Features.Users.ApplicationUser", "Author")
@@ -471,6 +705,32 @@ namespace HarbourOps.Api.Data.Migrations
                     b.Navigation("Author");
 
                     b.Navigation("WorkOrder");
+                });
+
+            modelBuilder.Entity("HarbourOps.Api.Features.Demo.Sandbox.DemoPersona", b =>
+                {
+                    b.HasOne("HarbourOps.Api.Features.Demo.Sandbox.DemoSandbox", null)
+                        .WithMany()
+                        .HasForeignKey("SandboxId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HarbourOps.Api.Features.Users.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId", "UserId")
+                        .HasPrincipalKey("OrganizationId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HarbourOps.Api.Features.Organizations.Organization", b =>
+                {
+                    b.HasOne("HarbourOps.Api.Features.Demo.Sandbox.DemoSandbox", "DemoSandbox")
+                        .WithMany()
+                        .HasForeignKey("DemoSandboxId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("DemoSandbox");
                 });
 
             modelBuilder.Entity("HarbourOps.Api.Features.Properties.Property", b =>

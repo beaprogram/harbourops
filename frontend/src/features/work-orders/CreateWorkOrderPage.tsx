@@ -9,6 +9,7 @@ import { Alert, LoadingState } from '../../components/Feedback'
 import { FormField, inputClass } from '../../components/FormField'
 import { categoryLabels } from '../../lib/format'
 import { useCreateWorkOrder, useProperties } from './workOrders'
+import { usePageTitle } from '../../lib/usePageTitle'
 
 const CATEGORIES = Object.keys(categoryLabels) as [WorkOrderCategory, ...WorkOrderCategory[]]
 
@@ -33,6 +34,7 @@ export function CreateWorkOrderPage() {
   const navigate = useNavigate()
   const properties = useProperties()
   const createWorkOrder = useCreateWorkOrder()
+  usePageTitle('New request')
   const {
     register,
     handleSubmit,
@@ -83,6 +85,7 @@ export function CreateWorkOrderPage() {
         </Alert>
       ) : (
         <form onSubmit={onSubmit} noValidate className="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-xs">
+          <p className="text-sm text-slate-600">All fields are required.</p>
           {serverError && !hasFieldErrors && (
             <Alert tone="error" title="The request was not submitted">
               {serverError.message}
@@ -90,7 +93,7 @@ export function CreateWorkOrderPage() {
           )}
 
           <div className="grid gap-5 sm:grid-cols-2">
-            <FormField label="Property" error={errors.propertyId?.message}>
+            <FormField required label="Property" error={errors.propertyId?.message}>
               <select className={inputClass} {...register('propertyId')}>
                 <option value="">Choose a property</option>
                 {properties.data.map((property) => (
@@ -100,7 +103,7 @@ export function CreateWorkOrderPage() {
                 ))}
               </select>
             </FormField>
-            <FormField label="Category" error={errors.category?.message}>
+            <FormField required label="Category" error={errors.category?.message}>
               <select className={inputClass} defaultValue="" {...register('category')}>
                 <option value="" disabled>
                   Choose a category
@@ -114,7 +117,7 @@ export function CreateWorkOrderPage() {
             </FormField>
           </div>
 
-          <FormField label="Title" hint="A short summary, for example “Kitchen sink draining slowly”." error={errors.title?.message}>
+          <FormField required label="Title" hint="A short summary, for example “Kitchen sink draining slowly”." error={errors.title?.message}>
             <input type="text" maxLength={120} className={inputClass} {...register('title')} />
           </FormField>
 

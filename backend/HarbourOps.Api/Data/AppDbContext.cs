@@ -1,4 +1,6 @@
+using HarbourOps.Api.Features.Attachments;
 using HarbourOps.Api.Features.Comments;
+using HarbourOps.Api.Features.Demo.Sandbox;
 using HarbourOps.Api.Features.Organizations;
 using HarbourOps.Api.Features.Properties;
 using HarbourOps.Api.Features.Users;
@@ -22,6 +24,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<WorkOrder> WorkOrders => Set<WorkOrder>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<Comment> Comments => Set<Comment>();
+    public DbSet<Attachment> Attachments => Set<Attachment>();
+    public DbSet<DemoSandbox> DemoSandboxes => Set<DemoSandbox>();
+    public DbSet<DemoPersona> DemoPersonas => Set<DemoPersona>();
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     protected override void OnModelCreating(ModelBuilder builder)

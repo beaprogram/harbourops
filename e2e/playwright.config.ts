@@ -7,7 +7,10 @@ import { defineConfig, devices } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './tests',
+  globalSetup: './global-setup.ts',
   fullyParallel: false,
+  // The tests share one demo database, so run them one at a time for predictable counts.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,

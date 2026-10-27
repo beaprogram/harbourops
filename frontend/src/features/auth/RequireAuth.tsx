@@ -1,5 +1,6 @@
 import { Navigate, Outlet, useLocation } from 'react-router'
 import { Alert, LoadingState } from '../../components/Feedback'
+import { useDemoSession } from '../demo/demo'
 import { useCurrentUser } from './auth'
 
 /**
@@ -9,8 +10,10 @@ import { useCurrentUser } from './auth'
 export function RequireAuth() {
   const location = useLocation()
   const { data: user, isPending, isError } = useCurrentUser()
+  // Only needed once signed out: an ended demo gets its own screen instead of the sign-in page.
+  const demo = useDemoSession({ enabled: user === null })
 
-  if (isPending) return <LoadingState label="Checking your session…" />
+  if (isPending || (user === null && demo.isPending)) return <LoadingState label="Checking your session…" />
   if (isError) {
     return (
       <div className="mx-auto max-w-lg p-6">
@@ -20,6 +23,7 @@ export function RequireAuth() {
       </div>
     )
   }
+  if (!user && demo.data?.status === 'ended') return <Navigate to="/demo/ended" replace />
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
   return <Outlet />
 }

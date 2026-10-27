@@ -19,6 +19,9 @@ export default defineConfig({
   },
   build: {
     sourcemap: false,
+    // The licences of every dependency bundled into the shipped JavaScript, served at /third-party-licenses.txt
+    // (.txt because ASP.NET Core's static files don't serve .md). The minified bundle itself keeps no notices.
+    license: { fileName: 'third-party-licenses.txt' },
     rolldownOptions: {
       output: {
         // Long-lived vendor chunks change rarely, so browsers keep them cached across app releases.

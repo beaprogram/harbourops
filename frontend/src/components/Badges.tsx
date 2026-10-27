@@ -29,3 +29,11 @@ export function PriorityBadge({ priority }: { priority: WorkOrderPriority }) {
 export function OverdueBadge() {
   return <span className={`${badgeBase} bg-red-700 text-white ring-red-700`}>Overdue</span>
 }
+
+export function DueSoonBadge() {
+  return (
+    <span className={`${badgeBase} bg-amber-100 text-amber-950 ring-amber-400`}>
+      <span aria-hidden="true">◷</span> Due soon
+    </span>
+  )
+}

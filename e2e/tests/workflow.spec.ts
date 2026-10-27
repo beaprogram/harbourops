@@ -1,33 +1,5 @@
-import { expect, test, type Browser, type Page } from '@playwright/test'
-
-// Fictional demo accounts seeded in demo mode (see README). The password is demo-only.
-const DEMO_PASSWORD = process.env.DEMO_PASSWORD ?? 'HarbourDemo!2026'
-const accounts = {
-  requester: 'resident.riley@harbourview.example',
-  manager: 'manager@harbourview.example',
-  technician: 'tech.sam@harbourview.example',
-  otherOrganizationManager: 'manager@covecommons.example',
-}
-
-/** Each role gets its own browser context: separate cookies, like separate people on separate devices. */
-async function signIn(browser: Browser, email: string): Promise<Page> {
-  const context = await browser.newContext()
-  const page = await context.newPage()
-  await page.goto('/login')
-  await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Password').fill(DEMO_PASSWORD)
-  await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
-  return page
-}
-
-function header(page: Page) {
-  return page.locator('main header')
-}
-
-function actions(page: Page) {
-  return page.getByRole('region', { name: 'Actions' })
-}
+import { expect, test } from '@playwright/test'
+import { accounts, actions, header, signIn } from './helpers'
 
 test('requester → manager → technician → manager: a request goes from submission to closure', async ({ browser }) => {
   const title = `Basement drain backing up ${Date.now()}`

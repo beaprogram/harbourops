@@ -5,9 +5,11 @@ import { createBrowserRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { createQueryClient } from './app/queryClient'
 import { routes } from './app/router'
+import { startSessionSync } from './app/sessionSync'
 import './index.css'
 
 const queryClient = createQueryClient()
+startSessionSync(queryClient)
 const router = createBrowserRouter(routes)
 
 createRoot(document.getElementById('root')!).render(

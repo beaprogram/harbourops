@@ -1,9 +1,11 @@
 using System.Security.Claims;
 using HarbourOps.Api.Data;
+using HarbourOps.Api.Features.Demo.Sandbox;
 using HarbourOps.Api.Features.Users;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace HarbourOps.Api.Common;
 
@@ -17,34 +19,52 @@ public sealed record CurrentUser(
     string DisplayName,
     UserRole Role,
     Guid OrganizationId,
-    string OrganizationName)
+    string OrganizationName,
+    Guid? DemoSandboxId = null,
+    DateTimeOffset? DemoExpiresAt = null)
 {
     public bool IsManager => Role == UserRole.Manager;
     public bool IsTechnician => Role == UserRole.Technician;
     public bool IsRequester => Role == UserRole.Requester;
+
+    /// <summary>A persona inside a visitor's demo sandbox (subject to the sandbox's lifetime and limits).</summary>
+    public bool IsDemo => DemoSandboxId is not null;
 }
 
 /// <summary>
 /// Runs after cookie authentication. The cookie only proves *who* the caller is; this middleware
 /// loads their current organization, role, and active flag from the database. A deleted or
 /// deactivated account is signed out immediately instead of waiting for the cookie to expire.
+///
+/// For demo personas it also checks the sandbox on every request. Once the sandbox has expired, been
+/// reset or ended, or demo mode is switched off, the cookie authorizes nothing: the caller continues as
+/// anonymous (so "start a new demo" still works) and protected endpoints answer 401 "demo_expired".
 /// </summary>
 public sealed class CurrentUserMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context, AppDbContext db)
+    /// <summary>Marks a request whose cookie belonged to a demo sandbox that has ended.</summary>
+    public const string DemoEndedItem = "HarbourOps.DemoEnded";
+
+    public async Task InvokeAsync(HttpContext context, AppDbContext db, TimeProvider clock, IOptions<DemoSandboxOptions> demo)
     {
         if (context.User.Identity?.IsAuthenticated == true && context.Request.Path.StartsWithSegments("/api"))
         {
-            var currentUser = Guid.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
+            var row = Guid.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
                 ? await db.Users
                     .AsNoTracking()
                     .Where(u => u.Id == userId && u.IsActive)
-                    .Select(u => new CurrentUser(
-                        u.Id, u.Email!, u.DisplayName, u.Role, u.OrganizationId, u.Organization.Name))
+                    .Select(u => new
+                    {
+                        User = new CurrentUser(
+                            u.Id, u.Email!, u.DisplayName, u.Role, u.OrganizationId, u.Organization.Name,
+                            u.Organization.DemoSandboxId,
+                            u.Organization.DemoSandbox != null ? u.Organization.DemoSandbox.ExpiresAt : null),
+                        SandboxRevokedAt = u.Organization.DemoSandbox != null ? u.Organization.DemoSandbox.RevokedAt : null,
+                    })
                     .SingleOrDefaultAsync(context.RequestAborted)
                 : null;
 
-            if (currentUser is null)
+            if (row is null)
             {
                 await context.SignOutAsync(IdentityConstants.ApplicationScheme);
                 await ProblemWriter.WriteAsync(context, StatusCodes.Status401Unauthorized,
@@ -52,7 +72,17 @@ public sealed class CurrentUserMiddleware(RequestDelegate next)
                 return;
             }
 
-            context.Items[typeof(CurrentUser)] = currentUser;
+            if (row.User.IsDemo
+                && (!demo.Value.Enabled || row.SandboxRevokedAt is not null || row.User.DemoExpiresAt <= clock.GetUtcNow()))
+            {
+                await context.SignOutAsync(IdentityConstants.ApplicationScheme);
+                context.User = new ClaimsPrincipal(new ClaimsIdentity());
+                context.Items[DemoEndedItem] = true;
+            }
+            else
+            {
+                context.Items[typeof(CurrentUser)] = row.User;
+            }
         }
 
         await next(context);

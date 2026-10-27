@@ -3,6 +3,7 @@ using HarbourOps.Api.Features.Properties;
 using HarbourOps.Api.Features.Users;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using NpgsqlTypes;
 
 namespace HarbourOps.Api.Features.WorkOrders;
 
@@ -73,6 +74,12 @@ public sealed class WorkOrder
     /// built-in <c>xmin</c> system column, which changes on every update of the row.
     /// </summary>
     public uint Version { get; set; }
+
+    /// <summary>
+    /// Full-text search document for Title + Description. A PostgreSQL generated column: the database
+    /// computes it on every insert/update, so it can never drift from the text. Never set it in code.
+    /// </summary>
+    public NpgsqlTsVector SearchVector { get; set; } = null!;
 }
 
 internal sealed class WorkOrderConfiguration : IEntityTypeConfiguration<WorkOrder>
@@ -153,5 +160,14 @@ internal sealed class WorkOrderConfiguration : IEntityTypeConfiguration<WorkOrde
         builder.HasIndex(w => new { w.OrganizationId, w.DueAt })
             .HasFilter("\"Status\" IN ('New', 'Assigned', 'InProgress')")
             .HasDatabaseName("IX_WorkOrders_Org_DueAt_Open");
+        builder.HasIndex(w => new { w.OrganizationId, w.UpdatedAt, w.Id })
+            .IsDescending(false, true, true)
+            .HasDatabaseName("IX_WorkOrders_Org_UpdatedAt");
+
+        // English full-text search with stemming ("leaking" matches "leak"), served by a GIN index.
+        builder.HasGeneratedTsVectorColumn(w => w.SearchVector, "english", w => new { w.Title, w.Description })
+            .HasIndex(w => w.SearchVector)
+            .HasMethod("GIN")
+            .HasDatabaseName("IX_WorkOrders_SearchVector");
     }
 }

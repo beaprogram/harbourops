@@ -11,7 +11,10 @@ export interface RecordedRequest {
   method: string
   url: string
   headers: Record<string, string>
+  /** Parsed JSON body, if the body was JSON. */
   body: unknown
+  /** The body exactly as passed to fetch (for example FormData for uploads). */
+  rawBody: unknown
 }
 
 type Handler = (request: RecordedRequest) => Response | Promise<Response>
@@ -22,6 +25,18 @@ export function json(status: number, body: unknown): Response {
     headers: { 'Content-Type': status >= 400 ? 'application/problem+json' : 'application/json' },
   })
 }
+
+/** An empty comment thread, for detail-page tests that are not about comments. */
+export const noComments = () => json(200, { items: [], hasOlder: false, totalCount: 0 })
+
+/** No photos (and uploads allowed), for detail-page tests that are not about photos. */
+export const noAttachments = () =>
+  json(200, {
+    items: [],
+    limits: { maxPerWorkOrder: 5, maxFileSizeBytes: 5242880, maxDimension: 10000, maxPixels: 40000000, acceptedTypes: ['image/jpeg', 'image/png'] },
+    canUpload: true,
+    cannotUploadReason: null,
+  })
 
 export function problem(status: number, code: string, detail: string, errors?: Record<string, string[]>): Response {
   return json(status, { status, title: 'Problem', detail, code, errors })
@@ -42,12 +57,15 @@ export function mockApi(handlers: Record<string, Handler>) {
       url,
       headers: (init?.headers ?? {}) as Record<string, string>,
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      rawBody: init?.body,
     }
     requests.push(request)
 
     const handler = handlers[`${method} ${url}`] ?? handlers[`${method} ${url.split('?')[0]}`]
     if (handler) return handler(request)
     if (url === '/api/antiforgery/token') return json(200, { token: `token-${requests.length}`, headerName: 'X-XSRF-TOKEN' })
+    // Demo sandboxes are off unless a test provides its own handler.
+    if (url === '/api/demo/session') return problem(404, 'not_found', 'Demo mode is not enabled.')
     throw new Error(`Unexpected request in test: ${method} ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)

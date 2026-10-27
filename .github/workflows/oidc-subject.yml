@@ -1,0 +1,36 @@
+name: Show OIDC subject (setup helper)
+
+# One-time helper for infra/main.bicep's githubOidcSubject parameter. GitHub's default "sub" claim depends on
+# when the repository was created (repositories created after 15 July 2026 use an immutable format with owner
+# and repository IDs), and Azure only accepts an exact match. So instead of guessing, this job requests an OIDC
+# token in the same "production" environment the deploy job uses and prints only its non-secret claims.
+# The token itself is never printed. Nothing here talks to Azure.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  subject:
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      id-token: write
+    steps:
+      - name: Print the deploy job's subject claim
+        run: |
+          token=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['value'])")
+          echo "::add-mask::$token"
+          printf '%s' "$token" | python3 -c "
+          import base64, json, sys
+          payload = sys.stdin.read().split('.')[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+          for key in ('sub', 'iss', 'aud', 'environment', 'repository', 'repository_id', 'repository_owner_id'):
+              print(f'{key}: {claims.get(key)}')
+          print()
+          print('Use this exact value for githubOidcSubject:')
+          print(claims['sub'])
+          " | tee -a "$GITHUB_STEP_SUMMARY"

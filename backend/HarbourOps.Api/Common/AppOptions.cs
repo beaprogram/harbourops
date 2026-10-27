@@ -39,3 +39,15 @@ public sealed class DemoDataOptions
     /// <summary>Shared password for the fictional demo accounts. Demo-only; never reuse it.</summary>
     public string? Password { get; set; }
 }
+
+/// <summary>Bound from the "Export" configuration section.</summary>
+public sealed class ExportOptions
+{
+    public const string SectionName = "Export";
+
+    /// <summary>
+    /// Maximum rows in one CSV export. Larger exports are refused with a clear message (never truncated),
+    /// keeping memory, database time, and response size bounded for a synchronous download.
+    /// </summary>
+    public int MaxRows { get; set; } = 5_000;
+}

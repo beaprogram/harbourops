@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, apiRequest, refreshAntiforgeryToken } from '../../api/client'
 import type { CurrentUser, DemoAccounts } from '../../api/types'
+import { announceSessionChange } from '../../app/sessionSync'
 
 export const currentUserKey = ['current-user'] as const
 
@@ -32,6 +33,7 @@ export function useLogin() {
     onSuccess: (user) => {
       queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== currentUserKey[0] })
       queryClient.setQueryData(currentUserKey, user)
+      announceSessionChange()
     },
   })
 }
@@ -47,6 +49,7 @@ export function useLogout() {
       // Drop every cached record from the previous session.
       queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== currentUserKey[0] })
       queryClient.setQueryData(currentUserKey, null)
+      announceSessionChange()
     },
   })
 }

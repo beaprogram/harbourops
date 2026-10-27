@@ -111,22 +111,32 @@ public sealed class DemoDataSeeder(
         logger.LogInformation("Demo data seeding finished: {CreatedCount} records created", created);
     }
 
-    /// <summary>
-    /// Replays the demo request through <see cref="WorkOrderWorkflow"/> so seeded records follow the
-    /// same rules as real ones and get a realistic activity history.
-    /// </summary>
     private void AddWorkOrderWithHistory(DemoWorkOrder demo, DateTimeOffset now)
     {
+        var (workOrder, events) = ReplayWorkOrder(demo, id => id, Actor, now);
+        db.WorkOrders.Add(workOrder);
+        db.AuditEvents.AddRange(events);
+    }
+
+    /// <summary>
+    /// Replays a demo request through <see cref="WorkOrderWorkflow"/> so seeded records follow the
+    /// same rules as real ones and get a realistic activity history. <paramref name="map"/> turns template IDs
+    /// into the IDs to store (the identity for the shared demo, fresh IDs for a visitor's sandbox), and
+    /// <paramref name="actor"/> gives the acting person for a template user ID.
+    /// </summary>
+    internal static (WorkOrder WorkOrder, List<AuditEvent> Events) ReplayWorkOrder(
+        DemoWorkOrder demo, Func<Guid, Guid> map, Func<Guid, CurrentUser> actor, DateTimeOffset now)
+    {
         var property = DemoData.Properties.Single(p => p.Id == demo.PropertyId);
-        var requester = Actor(demo.RequesterId);
-        var manager = Actor(DemoData.Users.Single(u => u.OrganizationId == property.OrganizationId && u.Role == UserRole.Manager).Id);
+        var requester = actor(demo.RequesterId);
+        var manager = actor(DemoData.Users.Single(u => u.OrganizationId == property.OrganizationId && u.Role == UserRole.Manager).Id);
         var createdAt = now.AddHours(-demo.CreatedHoursAgo);
         DateTimeOffset Step(double fraction) => createdAt.AddHours(demo.CreatedHoursAgo * fraction);
 
         var events = new List<AuditEvent>();
         var (workOrder, createdEvent) = Expect(
-            WorkOrderWorkflow.Create(requester, demo.PropertyId, demo.Title, demo.Description, demo.Category, createdAt));
-        workOrder.Id = demo.Id;
+            WorkOrderWorkflow.Create(requester, map(demo.PropertyId), demo.Title, demo.Description, demo.Category, createdAt));
+        workOrder.Id = map(demo.Id);
         events.Add(createdEvent);
 
         if (demo.Priority != WorkOrderPriority.Normal)
@@ -138,12 +148,12 @@ public sealed class DemoDataSeeder(
         {
             var technician = DemoData.Users.Single(u => u.Id == demo.TechnicianId);
             events.Add(Expect(WorkOrderWorkflow.Assign(
-                workOrder, manager, new TechnicianChoice(technician.Id, technician.DisplayName), Step(0.1))));
+                workOrder, manager, new TechnicianChoice(map(technician.Id), technician.DisplayName), Step(0.1))));
         }
 
         if (demo.Status is WorkOrderStatus.InProgress or WorkOrderStatus.Resolved or WorkOrderStatus.Closed)
         {
-            var technician = Actor(demo.TechnicianId!.Value);
+            var technician = actor(demo.TechnicianId!.Value);
             events.Add(Expect(WorkOrderWorkflow.Start(workOrder, technician, Step(0.25))));
 
             if (demo.ResolutionNote is not null)
@@ -172,8 +182,7 @@ public sealed class DemoDataSeeder(
             auditEvent.WorkOrderId = workOrder.Id;
         }
 
-        db.WorkOrders.Add(workOrder);
-        db.AuditEvents.AddRange(events);
+        return (workOrder, events);
     }
 
     private static CurrentUser Actor(Guid userId)

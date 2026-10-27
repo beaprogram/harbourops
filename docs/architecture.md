@@ -42,7 +42,8 @@ HarbourOps.Api/
   Data/
     AppDbContext.cs               Identity user tables + domain tables + Data Protection keys
     Migrations/
-    DatabaseStartup.cs            Optional migrate-on-start and demo seeding (config-driven)
+    DatabaseStartup.cs            Optional migrate-on-start and demo seeding (config-driven); key-ring report
+  Common/HostingConfiguration.cs  Azure identity, Key Vault key wrapping, and the secure-hosting guard
   Features/
     Auth/                         Identity, cookie, antiforgery, and rate-limit setup; login/logout/me
     WorkOrders/
@@ -53,7 +54,18 @@ HarbourOps.Api/
       WorkOrderService.cs         Loads, checks version, applies rule, saves atomically
       WorkOrderEndpoints.cs       HTTP mapping only
       WorkOrderContracts.cs       Request/response records (never entities)
-    Properties/, Users/, Organizations/, Comments/, Demo/
+      WorkOrderListQuery.cs       Search/filter/sort parameters → validated WorkOrderFilter
+      Export/                     CSV escaping + formula-injection protection, streamed export
+    Dashboard/                    Manager dashboard built from WorkOrderFilter definitions
+    Comments/                     Comment entity, plain-text rules, keyset paging, FOR SHARE lock
+    Attachments/                  Photo metadata, upload ordering and locking, authorised delivery
+      Processing/PhotoProcessor   Content sniffing, header limits, decode → orient → re-encode (SkiaSharp)
+      Storage/                    IAttachmentStorage boundary: private local directory or private Azure Blob container
+      AttachmentReconciler        Scheduled removal of old, unreferenced stored objects
+      UploadAdmission             Bounds uploads holding memory (processing + queue) before bodies are read
+    Demo/                         Shared local demo accounts (DemoDataSeeder) and the replayable fictional template
+      Sandbox/                    Per-visitor sandboxes: credential, personas, limits (DemoQuotas), cleanup
+    Properties/, Users/, Organizations/
 ```
 
 The layers each have one job:
@@ -94,11 +106,30 @@ erDiagram
     AspNetUsers ||--o{ AuditEvents : performs
     WorkOrders ||--o{ Comments : has
     AspNetUsers ||--o{ Comments : writes
+    WorkOrders ||--o{ Attachments : "has photos"
+    AspNetUsers ||--o{ Attachments : uploads
+    DemoSandboxes |o--o{ Organizations : "owns (demo only)"
+    DemoSandboxes ||--o{ DemoPersonas : offers
+    AspNetUsers ||--o| DemoPersonas : "is"
 
     Organizations {
         uuid Id PK
         text Name
         text Slug UK
+        uuid DemoSandboxId FK "null except in a visitor's sandbox"
+    }
+    DemoSandboxes {
+        uuid Id PK
+        bytea CredentialHash UK "SHA-256 of the cookie credential"
+        timestamptz ExpiresAt
+        timestamptz RevokedAt "reset, ended, expired, failed, disabled"
+        timestamptz CleanedAt "kept a day as a tombstone"
+        int counters "work orders, comments, actions, uploads, photos, bytes, exports"
+    }
+    DemoPersonas {
+        uuid SandboxId PK
+        text Key PK "manager | technician | requester | otherManager"
+        uuid UserId UK
     }
     AspNetUsers {
         uuid Id PK
@@ -135,6 +166,7 @@ erDiagram
         timestamptz ResolvedAt
         timestamptz ClosedAt
         xid xmin "concurrency token"
+        tsvector SearchVector "generated from Title + Description"
     }
     AuditEvents {
         uuid Id PK
@@ -147,6 +179,21 @@ erDiagram
         text Summary
         text Note
         timestamptz OccurredAt
+    }
+    Attachments {
+        uuid Id PK
+        uuid OrganizationId FK
+        uuid WorkOrderId FK
+        uuid UploadedById FK
+        timestamptz UploadedAt
+        text FileName "sanitised, .jpg"
+        text MediaType "image/jpeg"
+        text SourceMediaType "jpeg | png"
+        text StorageKey UK "32 hex"
+        bigint SizeBytes
+        int Width
+        int Height
+        text PreviewStorageKey UK
     }
     Comments {
         uuid Id PK
@@ -178,10 +225,119 @@ erDiagram
 | `(OrganizationId, Status)` | Status filters |
 | `(OrganizationId, AssignedTechnicianId, Status)` | A technician's queue |
 | `(OrganizationId, RequesterId, CreatedAt)` | A requester's own requests |
-| `(OrganizationId, DueAt) WHERE Status IN (open)` | Overdue/deadline queries (partial index) |
+| `(OrganizationId, DueAt) WHERE Status IN (open)` | Overdue and due-soon filters and dashboard counts (partial index) |
+| `(OrganizationId, UpdatedAt DESC, Id DESC)` | "Recently updated" sort |
+| GIN `(SearchVector)` | Full-text search |
+| `Comments (OrganizationId, WorkOrderId, CreatedAt, Id)` | Comment keyset pagination |
+| `Attachments (OrganizationId, WorkOrderId, UploadedAt, Id)` | A work order's photos in upload order |
+| `Attachments (StorageKey)`, `(PreviewStorageKey)` unique | One row per stored object; reconciliation lookups |
 | `AuditEvents (OrganizationId, WorkOrderId, OccurredAt)` | Activity timeline |
 
 All timestamps are `timestamptz`, written in UTC by an injected `TimeProvider`. The frontend shows them in `America/Halifax`.
+
+## Querying the work-order list
+
+The list, the CSV export, and the manager dashboard all query work orders through the same path, so they apply identical definitions. Their numbers match whenever they are evaluated over the same data at the same `now`:
+
+```mermaid
+flowchart LR
+    URL["URL / query string<br/>q, status, priority, propertyId,<br/>technicianId, unassigned, deadline,<br/>sort, direction, page"] --> Parse["WorkOrderFilter.TryParse<br/>(allowlists, bounds → 400)"]
+    Parse --> Filter["WorkOrderFilter"]
+    Cards["Dashboard card definitions<br/>(each a WorkOrderFilter)"] --> Filter
+    Filter --> Q["VisibleTo(user)<br/>→ ApplyFilter(filter, now)<br/>→ ApplySort(filter)"]
+    Q --> List["List: Count + one page"]
+    Q --> Export["CSV export: Count + every row<br/>(REPEATABLE READ, ≤ 5,000)"]
+    Q --> Dash["Dashboard: Count per card<br/>+ the card's own query string"]
+```
+
+**How the pieces fit:**
+
+- **Visibility first.** Results are always filtered by role and organization (`VisibleTo`) before search and filters, so counts never include records the user can't see.
+- **One clock reading.** Each request reads `now` once and returns it as `asOf`.
+- **Links reproduce counts.** `WorkOrderFilter.ToQueryString()` turns a filter back into URL parameters, so each dashboard card links to exactly the list it counted.
+
+## Demo sandboxes
+
+A visitor who chooses **Try the demo** gets a private copy of the fictional template: two organizations, their people, properties, and work. Each sandbox is ordinary data, isolated from every other visitor by the same organization boundaries that separate customers (decisions §37).
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant API as /api/demo
+    participant PG as PostgreSQL
+    participant C as Cleanup loop
+    B->>API: POST /sessions (antiforgery)
+    API->>PG: advisory lock, capacity check, insert sandbox (credential hash only)
+    API->>PG: seed 2 organizations, people, work (replayed through the workflow)
+    API-->>B: HarbourOps.Demo cookie (HttpOnly, /api/demo) + Identity cookie for "manager" (expires with the sandbox)
+    B->>API: POST /persona {"persona":"requester"}
+    API->>PG: persona key → user inside *this* sandbox
+    API-->>B: new Identity cookie
+    Note over B,PG: Every /api request: CurrentUserMiddleware checks the sandbox (expired, revoked, or disabled → 401 demo_expired)
+    B->>API: POST /reset or /end, or the lifetime passes
+    API->>PG: revoke
+    C->>PG: lock the sandbox's work, delete its photos and rows, mark it cleaned
+```
+
+**Where each concern lives:**
+
+| Concern | Where |
+| --- | --- |
+| Ownership and personas | `DemoSandboxService` (credential cookie, persona allowlist) |
+| Expiry on every request | `CurrentUserMiddleware` |
+| Limits | `DemoQuotas`: conditional UPDATEs in the write's transaction |
+| Removal | `DemoSandboxCleaner` |
+| Admin endpoints | None. Reset and end only revoke |
+
+## Hosting in Azure (prepared, not deployed)
+
+```mermaid
+flowchart LR
+    V((Visitor)) -- HTTPS --> AS[App Service<br/>Linux container B1]
+    AS -- "TLS, least-privilege role" --> PG[(PostgreSQL Flexible Server 18)]
+    AS -. "managed identity" .-> BL[(Blob: demo-photos, private)]
+    AS -. "managed identity: wrap/unwrap" .-> KV[Key Vault: dataprotection key, connection strings]
+    GH[GitHub Actions: manual + protected environment] -- OIDC --> ACR[(Container Registry)] --> AS
+```
+
+The same image runs locally and in Azure:
+
+| Setting | Local (Compose, `Demo`) | Hosted (`PublicDemo`) |
+| --- | --- | --- |
+| Photo storage | Local directory | Blob container |
+| Cookie keys | Unencrypted at rest | Wrapped by Key Vault |
+| Shared demo accounts | On | Off |
+| Migrations | At startup | Separate release step |
+
+`PublicDemo` also refuses to start if any of the hosted settings is missing (decisions §43). See the [deployment runbook](deployment.md).
+
+## Photo attachments
+
+Photo bytes and photo metadata live in different places that can't share a transaction, so the upload is ordered to make a photo visible only once everything has succeeded:
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant API as Upload endpoint
+    participant P as PhotoProcessor
+    participant S as IAttachmentStorage (private files)
+    participant PG as PostgreSQL
+    B->>API: POST multipart + X-XSRF-TOKEN
+    API->>PG: precheck: visible? open? below photo limit? (no lock)
+    API->>API: stream one part, refuse > 5 MiB (413)
+    API->>P: sniff bytes, check header dimensions, decode, orient, re-encode JPEG + preview
+    API->>S: save full + preview under random keys (not visible: no row yet)
+    API->>PG: BEGIN · SELECT … FOR NO KEY UPDATE · re-check status · COUNT (new statement) · INSERT · COMMIT
+    alt anything fails after storing
+        API->>S: delete both objects (cleanup ignores cancellation)
+    end
+    API-->>B: 201 metadata (or 4xx/503 problem)
+    Note over S,PG: AttachmentReconciler later removes objects that are older than 24 h and have no row
+```
+
+**Delivery.** Photos are served only through `GET /api/work-orders/{id}/attachments/{attachmentId}/preview|content`. Every request re-checks current work-order visibility. Responses send `private, no-store`, `nosniff`, `same-origin` resource policy, and a header-safe `Content-Disposition`. The gallery loads previews only; the full image loads when a photo is opened in the dialog.
+
+Photos, like comments, are supporting material: they never change a work order's Status, Version, UpdatedAt, or activity timeline. See [decisions §30–35](decisions.md#30-image-processing-with-skiasharp-mit).
 
 ## Workflow
 
@@ -269,9 +425,10 @@ frontend/src/
 
 | Level | Tool | What it proves |
 | --- | --- | --- |
-| Workflow unit tests | xUnit | The complete permission table (5 statuses × 5 kinds of actor), transitions, note validation, deadlines, reopen behaviour |
-| API integration tests | xUnit + `WebApplicationFactory` + Testcontainers PostgreSQL 18 | Unauthenticated 401s; organization isolation for lists, reads, writes, and pickers; cross-organization references rejected (by the app *and* by database constraints); requester and technician visibility; invalid transitions; resolution note required; audit + update atomicity (with a mutation check); stale and simultaneous updates; antiforgery (missing, forged, pre-login, other user's token); rate limiting; repeatable seeding; deadlines with a fake clock |
-| Component tests | Vitest + React Testing Library | API client token and retry handling; login validation and errors; only allowed actions rendered; 409 recovery flow; server validation errors mapped to fields; Halifax time formatting |
-| End-to-end | Playwright against Docker Compose | Requester → manager → technician → manager in separate browser contexts, the activity history, and a manager from another organization blocked |
+| Workflow unit tests | xUnit | The complete permission table (5 statuses × 5 kinds of actor), transitions, note validation, deadlines and due-soon boundaries, search parsing, filter round-trips, CSV escaping and formula neutralisation; photo processing and local storage; the Blob adapter against Azurite (round trip, no overwrite, foreign blobs never listed, private container, cancellation); the secure-hosting guard |
+| API integration tests | xUnit + `WebApplicationFactory` + Testcontainers PostgreSQL 18 and Azurite | Unauthenticated 401s; organization isolation for lists, reads, writes, and pickers; cross-organization references rejected (by the app *and* by database constraints); requester and technician visibility; invalid transitions; resolution note required; audit + update atomicity (with a mutation check); stale and simultaneous updates; antiforgery (missing, forged, pre-login, other user's token); rate limiting; repeatable seeding; deadlines with a fake clock. **Milestone 2:** combined search and filters; parameter validation; stable sorting with tied values across pages; role and organization limits on results, counts, and filter choices; overdue and due-soon boundaries at ±1 µs; every dashboard number equal to its linked list; comment permissions, validation, keyset paging, and the comment-versus-close race (mutation-checked); export filters, order, headers, malicious cells, organization scope, and row limit. **Milestone 3:** valid JPEG and PNG uploads; deceptive, damaged, and unsupported content; size, dimension, and count limits; EXIF orientation applied and EXIF, GPS, and comments removed; isolation of photo metadata, previews, and downloads across organizations and roles (including after reassignment); missing antiforgery; malformed multipart bodies (no file part, empty file, file after four parts, missing closing boundary); uploads after closing; upload-versus-close and upload-versus-upload races (both mutation-checked); storage-failure and database-failure cleanup; reconciliation; response headers and hostile file names; malformed multipart bodies. **Milestone 4:** two visitors can't reach each other's records or photos as any persona; persona switching only reaches the owned sandbox (guessed credentials, smuggled IDs, and unknown keys refused); demo endpoints never authenticate or change ordinary accounts and personas can't use password sign-in; expired, reset, and ended sandboxes refuse retained cookies (photos, export, dashboard included); demo mode unreachable when disabled; concurrent starts respect capacity and concurrent writes respect per-sandbox limits (both mutation-checked); cleanup retries after a mid-way storage failure, is idempotent, and keeps other visitors' and ordinary photos; uploads in flight when a demo ends leave no row or file (both orderings, mutation-checked); antiforgery on every demo POST; per-client rate limit; bounded upload admission; the Blob provider end to end (access rules, headers, refused-upload cleanup, reconciliation, sandbox cleanup); Key Vault wiring; the secure-hosting guard and the committed PublicDemo configuration; health and version endpoints |
+| Component tests | Vitest + React Testing Library | API client token and retry handling, including the refusal to retry as a different person after another tab changed the session; "Try the demo", persona switching, two-step reset with focus management, ending, and the ended screen; login validation and errors; only allowed actions rendered; 409 recovery flow; server validation errors mapped to fields; Halifax time formatting and deadline labels; URL filters, debounced search, page reset, Clear filters, and empty-state recovery; dashboard links; comment double-submit, failure, and closed states; export progress, limit, and failure |
+| Accessibility | Playwright + axe-core | WCAG 2.2 A/AA scans of 12 screens and states (including the demo banner and ended screen), 320 px reflow, keyboard journeys, reduced motion (details in [accessibility.md](accessibility.md)) |
+| End-to-end | Playwright against Docker Compose | Requester → manager → technician → manager in separate browser contexts; a requester's photo viewed by the manager (keyboard-opened dialog, Escape returns focus) and refused (404) to another organization; a dashboard card opening the matching filtered list; filters surviving refresh and Back; a requester's comment read by the manager; non-managers blocked from the dashboard and export (UI and API); a CSV download with Halifax timestamps; two visitors in separate browser contexts using "Try the demo": isolation of records and photos, persona switching, reset affecting only one visitor, and the ended screen; image processing in the running container (EXIF orientation and GPS/comment removal on stored bytes; in CI this is the linux/amd64 image on an x64 runner) |
 
 The EF Core in-memory provider is **not** used anywhere. Behaviour that depends on the database, such as constraints, `xmin` concurrency, and transactions, is always tested against real PostgreSQL.

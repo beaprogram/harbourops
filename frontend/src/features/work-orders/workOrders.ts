@@ -7,28 +7,42 @@ import type {
   PropertySummary,
   Technician,
   WorkOrderDetail,
+  WorkOrderFilterOptions,
   WorkOrderListItem,
   WorkOrderPriority,
-  WorkOrderStatus,
 } from '../../api/types'
+import { toSearchParams, type WorkOrderListFilters } from './listFilters'
 
 export const workOrderKeys = {
   all: ['work-orders'] as const,
-  list: (filters: { statuses: WorkOrderStatus[]; page: number; pageSize: number }) =>
-    ['work-orders', 'list', filters] as const,
+  list: (query: string) => ['work-orders', 'list', query] as const,
+  filterOptions: ['work-orders', 'filter-options'] as const,
   detail: (id: string) => ['work-orders', 'detail', id] as const,
   activity: (id: string) => ['work-orders', 'activity', id] as const,
 }
 
-export function useWorkOrderList(filters: { statuses: WorkOrderStatus[]; page: number; pageSize: number }) {
+/** The API query for a list view: the URL filters plus the page size. */
+export function listQueryString(filters: WorkOrderListFilters, pageSize: number): string {
+  const params = toSearchParams(filters)
+  params.set('pageSize', String(pageSize))
+  return params.toString()
+}
+
+export function useWorkOrderList(filters: WorkOrderListFilters, pageSize: number) {
+  const query = listQueryString(filters, pageSize)
   return useQuery({
-    queryKey: workOrderKeys.list(filters),
-    queryFn: () => {
-      const params = new URLSearchParams({ page: String(filters.page), pageSize: String(filters.pageSize) })
-      filters.statuses.forEach((status) => params.append('status', status))
-      return apiRequest<PagedResponse<WorkOrderListItem>>(`/api/work-orders?${params.toString()}`)
-    },
+    queryKey: workOrderKeys.list(query),
+    queryFn: () => apiRequest<PagedResponse<WorkOrderListItem>>(`/api/work-orders?${query}`),
+    // Keep showing the previous results while a new filter loads, instead of flashing a spinner.
     placeholderData: keepPreviousData,
+  })
+}
+
+export function useFilterOptions() {
+  return useQuery({
+    queryKey: workOrderKeys.filterOptions,
+    queryFn: () => apiRequest<WorkOrderFilterOptions>('/api/work-orders/filter-options'),
+    staleTime: 60_000,
   })
 }
 

@@ -8,7 +8,9 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
 - `backend/HarbourOps.Api/Common/`: cross-cutting HTTP pieces (current user, antiforgery, Problem Details mapping).
 - `backend/HarbourOps.Tests/`: `Workflow/` (pure unit tests) and `Api/` (integration tests on real PostgreSQL via Testcontainers).
 - `frontend/src/features/<feature>/`: pages, hooks (TanStack Query), and their tests. `src/api/client.ts` is the only HTTP entry point.
-- `e2e/`: Playwright tests against the running Docker Compose stack.
+- `e2e/`: Playwright and axe tests against the running Docker Compose stack.
+- `infra/`: Bicep for the hosted demo (not deployed) and the least-privilege database role script. `.github/workflows/deploy.yml` deploys only by manual dispatch into the protected `production` environment.
+- Photos are stored in `Attachments:Storage:LocalPath`: `.data/attachments/` in Development (git-ignored), and the `attachments-data` volume in Compose.
 
 ## Rules that must not be broken
 
@@ -20,6 +22,31 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
 - **Workflow changes go through `WorkOrderWorkflow`.**
   - Add a new transition as its own function and its own endpoint, not a generic status setter.
   - Return the `AuditEvent`, and save it in the same `SaveChanges` as the change.
+- **List, dashboard, and export queries share one path.**
+  - Use `VisibleTo(user)` → `ApplyFilter(filter, now)` → `ApplySort(filter)`, with a `WorkOrderFilter` from `WorkOrderFilter.TryParse`.
+  - Never build ad-hoc filters for a new view.
+  - Read the clock once per request and reuse that `now` everywhere in the response (`asOf`).
+  - New sort fields must be added to the allowlist and must end with the `Id` tie-breaker.
+- **Comments are not workflow.** They never touch a work order's `Status`, `Version`, `UpdatedAt`, or `AuditEvent`s. Adding one takes the `FOR SHARE` row lock in `CommentService.AddAsync`; keep it.
+- **Photos follow work-order visibility and are not workflow.**
+  - Every attachment query goes through `.VisibleTo(user)` on the work order.
+  - Photos never change `Status`, `Version`, `UpdatedAt`, or `AuditEvent`s.
+  - Photo bytes are served only by the authorized `/preview` and `/content` endpoints, with `private, no-store`. Never add a static upload folder, public container, or public URL.
+- **Uploads keep their ordering** (decisions §32–33): process → store under fresh keys → in one transaction take `FOR NO KEY UPDATE` on the work order, re-check, count in a **separate statement after the lock**, insert, commit. On any failure, delete the stored objects with `CancellationToken.None`. The concurrency tests are mutation-checked; keep them passing.
+- **Storage keys come only from `StorageKeys.New()`.** Never build a path or key from a submitted file name; the name is display-only, via `DisplayFileName.Sanitize`. New storage backends implement `IAttachmentStorage`.
+- **Image content is trusted only after `PhotoProcessor`** has sniffed, decoded, and re-encoded it. Never store or serve the original upload bytes.
+- **Demo sandboxes (decisions §37–§39) reuse organization isolation.**
+  - Never accept a sandbox, user, organization, or role ID from the client. The sandbox comes from the `HarbourOps.Demo` credential cookie (only its hash is stored), and personas are chosen by allowlisted key.
+  - Demo endpoints must never sign in, change, or delete non-sandbox accounts or organizations.
+  - Every new write path that adds data must call `DemoQuotas.TryUseAsync` (or `TryStorePhotoAsync`) **inside the same transaction** as the write. The conditional UPDATE also re-checks that the sandbox is still active.
+  - Expiry is enforced in `CurrentUserMiddleware` on every request; keep the persona ticket's `ExpiresUtc = sandbox.ExpiresAt` and `AllowRefresh = false`.
+  - Cleanup only runs in `DemoSandboxCleaner`: revoke → lock the sandbox's work orders → delete its stored objects → delete rows → mark cleaned. Keep every step idempotent; never add a public endpoint that deletes data.
+- **Storage deletes must be idempotent** (missing object or directory is success). New `IAttachmentStorage` implementations must never overwrite, never expose public URLs, and must only list objects whose names are storage keys.
+- **Hosted configuration (`appsettings.PublicDemo.json`) is guarded** by `HostingConfiguration.SecureConfigurationProblems`. Don't weaken the guard; extend it when adding anything that must be secure in hosting.
+- **Data Protection:** keys stay in PostgreSQL; never change `DataProtection:ApplicationName` for an existing deployment (it signs everyone out). Never delete keys automatically.
+- **Logs:** never log the demo credential, cookies, request bodies, or connection strings. Don't enable App Service's `AppServiceHTTPLogs` (it has a Cookie column).
+- **Migrations must be backward compatible with the previous image** (add nullable columns and new tables first). Hosted migrations run as a release step with the migration bundle, never at startup.
+- **CSV cells go through `Csv.Cell`** (formula neutralisation, then RFC 4180 escaping). Never write raw values to an export.
 - **Commands carry `version`.** Stale versions return 409 (`stale_version`); invalid transitions return 422 (`invalid_transition`).
 - **State-changing `/api` requests need the antiforgery header.** That is enforced by `AntiforgeryMiddleware`; don't add exemptions.
 - **API contracts are records in `*Contracts.cs`.** Never return EF entities from endpoints.
@@ -28,7 +55,8 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
 - **Cross-organization references:** keep composite `(OrganizationId, X)` foreign keys when adding tables that point at org-owned rows.
 - **Secrets:** none in git. Local connection strings go in `dotnet user-secrets`; Docker uses `.env` (git-ignored).
 - **Fictional data only:** `.example` emails, invented street names.
-- **No new dependencies** without checking peer and dependency ranges, then pinning exact versions (`Directory.Packages.props`, exact npm versions) and committing lockfiles.
+- **No new dependencies** without checking peer and dependency ranges and the licence, then pinning exact versions (`Directory.Packages.props`, exact npm versions), committing lockfiles, and updating `THIRD-PARTY-NOTICES.md` (bundled frontend packages must appear in the generated `third-party-licenses.txt`; native code or NOTICE files go into `/app/licenses` in the `Dockerfile`).
+- **Deployment trust:** the Azure federated credential uses the exact OIDC `sub` printed by `oidc-subject.yml`; never compose it by hand. Actions in jobs that can obtain cloud tokens are pinned to commit SHAs, and releases deploy the tested image by digest.
 
 ## Code style
 
@@ -43,7 +71,15 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
 - Tests:
   - Name them after behaviour ("Technician_cannot_update_another_technicians_job").
   - Integration tests create the work orders they change; never mutate shared seeded records.
-  - Frontend tests fake only `fetch`, via `mockApi`, and render real routes with `renderApp`.
+  - Frontend tests fake only `fetch`, via `mockApi`, and render real routes with `renderApp`. Detail-page tests need comments and attachments handlers (`noComments`, `noAttachments`).
+  - Frontend list URL parameters are defined in `features/work-orders/listFilters.ts` and must keep the same names as the API's query parameters.
+  - Test images are generated in code (`TestImages` in the backend, `e2e/tests/images.ts`). Don't commit binary fixtures. Integration tests get a private temporary storage directory from `HarbourOpsFactory.StoragePath`.
+  - Playwright tests get sessions from `signIn()` in `e2e/tests/helpers.ts` (saved by `global-setup.ts`). Don't add extra UI logins: the production limit is 10 sign-ins per minute per IP.
+  - New screens and states get an axe scan in `e2e/tests/accessibility.spec.ts`. A clean scan is not proof of accessibility: record manual checks and gaps in `docs/accessibility.md`.
+  - Set each page's document title with `usePageTitle`. Dialogs use native `<dialog>` and return focus to their trigger.
+  - After anything that changes who is signed in (login, logout, demo start/switch/reset/end): refresh the antiforgery token, drop cached queries, and call `announceSessionChange()`. `apiRequest` must never retry a write as a different person (`session_changed`).
+  - Demo tests: backend `DemoSandboxTests` use separate `CookieContainer`s per visitor and `Copy()` to replay retained cookies; frontend demo tests mock `/api/demo/session` (default handler answers 404); e2e demo tests use separate browser contexts and end their sandboxes to free capacity.
+  - Azure Blob tests run against Azurite (`AzuriteFixture`); results are emulator evidence only.
 
 ## Verification commands (run before calling work done)
 
@@ -61,7 +97,14 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm test && npm ru
 # End-to-end (stack on http://localhost:8088)
 docker compose up -d --build
 cd e2e && npm ci && npx playwright install chromium && npm test
+
+# Infrastructure (no Azure sign-in needed)
+az bicep build --file infra/main.bicep && az bicep lint --file infra/main.bicep
 ```
+
+Note: for `dotnet ef`, `-c` means `--context`. Use `--configuration Release` for the build configuration.
+
+Docker on this project's dev machine has no buildx: Compose falls back to the legacy builder, which does not define `$BUILDPLATFORM` and keeps every build stage as a dangling image (several GB per build). Don't use `--platform=$BUILDPLATFORM` in the Dockerfile.
 
 Adding a migration: `dotnet tool restore && dotnet ef migrations add <Name> --project backend/HarbourOps.Api --output-dir Data/Migrations`, run with a configured `ConnectionStrings:Default`. Review the generated SQL with `dotnet ef migrations script`.
 

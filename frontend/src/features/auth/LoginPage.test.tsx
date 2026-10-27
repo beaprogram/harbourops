@@ -34,12 +34,13 @@ describe('LoginPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Email or password is incorrect.')
   })
 
-  it('signs in, refreshes the antiforgery token, and opens the work-order list', async () => {
+  it("signs in, refreshes the antiforgery token, and opens the manager's dashboard", async () => {
     const api = mockApi({
       'GET /api/auth/me': signedOut,
       'GET /api/demo/accounts': demoDisabled,
       'POST /api/auth/login': () => json(200, manager),
-      'GET /api/work-orders': () => json(200, { items: [], page: 1, pageSize: 20, totalCount: 0, totalPages: 0 }),
+      'GET /api/dashboard': () =>
+        json(200, { asOf: '2026-01-15T19:00:00Z', cards: [], workload: [], oldestOverdue: [], overdueListQuery: 'deadline=overdue' }),
     })
     const { user, router } = renderApp('/login')
 
@@ -47,8 +48,8 @@ describe('LoginPage', () => {
     await user.type(screen.getByLabelText('Password'), 'HarbourDemo!2026')
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
 
-    expect(await screen.findByRole('heading', { name: 'All work orders' })).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe('/work-orders')
+    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/dashboard')
     // One token for the anonymous sign-in request, then a fresh one for the signed-in user.
     expect(api.requestsTo('GET', '/api/antiforgery/token')).toHaveLength(2)
   })

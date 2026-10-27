@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { manager, workOrder } from '../../test/fixtures'
-import { json, mockApi, problem, renderApp } from '../../test/utils'
+import { json, mockApi, noAttachments, noComments, problem, renderApp } from '../../test/utils'
 
 const properties = [{ id: 'p-1', name: 'Quayside Lofts', addressLine: '18 Quayside Lane', community: 'Halifax' }]
 
@@ -49,6 +49,8 @@ describe('CreateWorkOrderPage', () => {
       'GET /api/properties': () => json(200, properties),
       'POST /api/work-orders': () => json(201, workOrder({ id: 'wo-new', title: 'Leaking tap', status: 'New', allowedActions: [] })),
       'GET /api/work-orders/wo-new/activity': () => json(200, []),
+      'GET /api/work-orders/wo-new/comments': noComments,
+      'GET /api/work-orders/wo-new/attachments': noAttachments,
     })
     const { user, router } = renderApp('/work-orders/new')
 

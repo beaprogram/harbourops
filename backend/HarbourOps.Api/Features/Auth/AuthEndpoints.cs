@@ -11,8 +11,11 @@ public sealed record LoginRequest(string? Email, string? Password);
 
 public sealed record OrganizationSummary(Guid Id, string Name);
 
+/// <summary>Present only for a demo persona: when the visitor's sandbox (and so this session) ends.</summary>
+public sealed record DemoSessionSummary(DateTimeOffset ExpiresAt);
+
 public sealed record CurrentUserResponse(
-    Guid Id, string Email, string DisplayName, UserRole Role, OrganizationSummary Organization);
+    Guid Id, string Email, string DisplayName, UserRole Role, OrganizationSummary Organization, DemoSessionSummary? Demo = null);
 
 public sealed record AntiforgeryTokenResponse(string Token, string HeaderName);
 
@@ -93,6 +96,14 @@ public static class AuthEndpoints
             return invalidCredentials;
         }
 
+        // Demo personas have no password and are only reachable through their own sandbox's credential.
+        // Refusing them here (before the password check) also stops anyone counting lockout failures against them.
+        if (await db.Organizations.AnyAsync(o => o.Id == user.OrganizationId && o.DemoSandboxId != null, ct))
+        {
+            logger.LogInformation("Sign-in refused for demo persona {UserId}", user.Id);
+            return invalidCredentials;
+        }
+
         var result = await signInManager.PasswordSignInAsync(user, request.Password!, isPersistent: false, lockoutOnFailure: true);
         if (!result.Succeeded)
         {
@@ -110,6 +121,7 @@ public static class AuthEndpoints
             user.Id, user.Email!, user.DisplayName, user.Role, new OrganizationSummary(user.OrganizationId, organizationName)));
     }
 
-    private static CurrentUserResponse ToResponse(CurrentUser user) =>
-        new(user.Id, user.Email, user.DisplayName, user.Role, new OrganizationSummary(user.OrganizationId, user.OrganizationName));
+    public static CurrentUserResponse ToResponse(CurrentUser user) =>
+        new(user.Id, user.Email, user.DisplayName, user.Role, new OrganizationSummary(user.OrganizationId, user.OrganizationName),
+            user.DemoExpiresAt is { } expiresAt ? new DemoSessionSummary(expiresAt) : null);
 }

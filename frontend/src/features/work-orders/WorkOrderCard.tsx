@@ -1,15 +1,23 @@
 import { Link } from 'react-router'
 import type { UserRole, WorkOrderListItem } from '../../api/types'
-import { OverdueBadge, PriorityBadge, StatusBadge } from '../../components/Badges'
-import { categoryLabels, formatDateTime, workOrderReference } from '../../lib/format'
+import { PriorityBadge, StatusBadge } from '../../components/Badges'
+import { categoryLabels, workOrderReference } from '../../lib/format'
+import { DeadlineBadge, DeadlineValue } from './Deadline'
 
-export function WorkOrderCard({ item, viewerRole }: { item: WorkOrderListItem; viewerRole: UserRole }) {
+interface WorkOrderCardProps {
+  item: WorkOrderListItem
+  viewerRole: UserRole
+  /** The server's "now" for this page of results. */
+  asOf: string
+}
+
+export function WorkOrderCard({ item, viewerRole, asOf }: WorkOrderCardProps) {
   return (
-    <li className="relative rounded-lg border border-slate-200 bg-white p-4 shadow-xs transition-colors focus-within:border-teal-600 hover:border-teal-600">
+    <li className="relative rounded-lg border border-slate-200 bg-white p-4 shadow-xs transition-colors focus-within:border-teal-600 focus-within:ring-3 focus-within:ring-teal-500 hover:border-teal-600">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <p className="text-xs font-semibold text-slate-500">{workOrderReference(item.number)}</p>
-          <h3 className="mt-0.5 font-semibold text-navy-900">
+          <h3 className="mt-0.5 font-semibold break-words text-navy-900">
             {/* The ::after overlay makes the whole card clickable while keeping one accessible link. */}
             <Link to={`/work-orders/${item.id}`} className="after:absolute after:inset-0 focus-visible:outline-none">
               {item.title}
@@ -21,7 +29,7 @@ export function WorkOrderCard({ item, viewerRole }: { item: WorkOrderListItem; v
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 md:justify-end">
-          {item.isOverdue && <OverdueBadge />}
+          <DeadlineBadge item={item} />
           <PriorityBadge priority={item.priority} />
           <StatusBadge status={item.status} />
         </div>
@@ -35,7 +43,9 @@ export function WorkOrderCard({ item, viewerRole }: { item: WorkOrderListItem; v
         )}
         <div className="flex gap-1">
           <dt className="font-medium text-slate-700">Due:</dt>
-          <dd>{formatDateTime(item.dueAt)}</dd>
+          <dd>
+            <DeadlineValue item={item} asOf={asOf} />
+          </dd>
         </div>
       </dl>
     </li>

@@ -1,0 +1,150 @@
+name: Deploy public demo
+
+# Runs only when someone starts it by hand (Actions → "Deploy public demo" → Run workflow). Adding or changing this
+# file never deploys anything. The deploy job uses the protected "production" environment: required reviewers
+# approve every deployment before the job gets an Azure token (on GitHub Free/Pro/Team this needs a public
+# repository; see docs/deployment.md). Azure access is OIDC federation to a user-assigned managed identity
+# (infra/main.bicep), so no Azure secret is stored in GitHub. The environment's *variables* (not secrets) hold the
+# non-secret identifiers.
+#
+# The image that is tested is the image that is deployed: it is built once, exercised by the browser tests on this
+# x64 runner, pushed, and released by its immutable digest (not a tag).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Full CI on the commit being deployed
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Build, test the image, migrate, and release
+    needs: checks
+    # Defence in depth next to the environment's deployment-branch rule: only main or a release tag.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment:
+      name: production
+      url: ${{ vars.WEBAPP_URL }}
+    permissions:
+      contents: read
+      id-token: write # OIDC token for azure/login; nothing else
+    env:
+      REPOSITORY: ${{ vars.ACR_LOGIN_SERVER }}/harbourops
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      # Actions in this job are pinned to commit SHAs because the job can obtain an Azure token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the release image (linux/amd64, commit baked in)
+        run: |
+          docker build --platform linux/amd64 --build-arg SOURCE_VERSION="${{ github.sha }}" \
+            -t "$REPOSITORY:${{ github.sha }}" -t harbourops-app:latest .
+          docker image inspect harbourops-app:latest --format '{{.Os}}/{{.Architecture}}' | tee platform.txt
+          grep -qx 'linux/amd64' platform.txt
+
+      - name: Start that exact image with a throwaway database
+        run: |
+          cp .env.example .env
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+          docker compose up -d --no-build
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8088/health/ready > /dev/null && exit 0
+            sleep 2
+          done
+          docker compose logs app
+          exit 1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Browser tests against the image about to be released
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test tests/photo-processing.spec.ts tests/photos.spec.ts tests/demo-sandbox.spec.ts tests/workflow.spec.ts
+
+      - name: Stop the throwaway stack
+        if: always()
+        run: docker compose down -v
+
+      - name: Azure sign-in (OIDC, no stored credential)
+        uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push the tested image and record its digest
+        id: image
+        run: |
+          az acr login --name "${{ vars.ACR_NAME }}"
+          docker push "$REPOSITORY:${{ github.sha }}"
+          digest=$(docker image inspect "$REPOSITORY:${{ github.sha }}" --format '{{index .RepoDigests 0}}')
+          case "$digest" in "$REPOSITORY@sha256:"*) ;; *) echo "Unexpected digest reference: $digest"; exit 1 ;; esac
+          echo "reference=$digest" >> "$GITHUB_OUTPUT"
+          echo "Image: \`$digest\` (commit ${{ github.sha }})" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the migration bundle
+        env:
+          ConnectionStrings__Default: Host=localhost;Database=design_time_only # design time only; never connects
+        run: |
+          dotnet tool restore
+          dotnet ef migrations bundle --project backend/HarbourOps.Api --configuration Release \
+            --self-contained -r linux-x64 -o efbundle --force
+
+      - name: Open the database firewall for this runner only
+        id: firewall
+        run: |
+          ip=$(curl -fsS https://api.ipify.org)
+          echo "::add-mask::$ip"
+          az postgres flexible-server firewall-rule create --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.POSTGRES_SERVER }}" --rule-name "gha-${{ github.run_id }}" \
+            --start-ip-address "$ip" --end-ip-address "$ip" --output none
+
+      - name: Apply migrations (controlled release step, as the schema owner)
+        run: |
+          connection=$(az keyvault secret show --vault-name "${{ vars.KEY_VAULT_NAME }}" \
+            --name postgres-migrator-connection --query value --output tsv)
+          echo "::add-mask::$connection"
+          ./efbundle --connection "$connection"
+
+      - name: Close the database firewall
+        if: always() && steps.firewall.outcome != 'skipped'
+        run: |
+          az postgres flexible-server firewall-rule delete --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.POSTGRES_SERVER }}" --rule-name "gha-${{ github.run_id }}" --yes --output none || true
+
+      - name: Point the web app at the tested image, by digest
+        run: |
+          az webapp config container set --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.WEBAPP_NAME }}" --container-image-name "${{ steps.image.outputs.reference }}" --output none
+
+      - name: Wait until the new version is serving
+        run: |
+          for _ in $(seq 1 60); do
+            version=$(curl -fsS "${{ vars.WEBAPP_URL }}/health/version" | python3 -c "import json,sys; print(json.load(sys.stdin)['version'])" || true)
+            if [ "$version" = "${{ github.sha }}" ] && curl -fsS "${{ vars.WEBAPP_URL }}/health/ready" > /dev/null; then
+              status=$(curl -fsS "${{ vars.WEBAPP_URL }}/api/demo/session" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])")
+              [ "$status" = "none" ] && echo "Version ${{ github.sha }} is ready and the demo endpoint answers." && exit 0
+            fi
+            sleep 10
+          done
+          echo "The new version did not become ready. Roll back to the previous digest (docs/deployment.md, rollback)."
+          exit 1

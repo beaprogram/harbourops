@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { json, mockApi, problem } from '../test/utils'
-import { ApiError, apiRequest } from './client'
+import { ApiError, apiRequest, setExpectedUser } from './client'
 
 describe('apiRequest', () => {
   it('sends the antiforgery token on state-changing requests but not on reads', async () => {
@@ -31,6 +31,23 @@ describe('apiRequest', () => {
     const tokensUsed = api.requestsTo('POST', '/api/things').map((r) => r.headers['X-XSRF-TOKEN'])
     expect(tokensUsed).toHaveLength(2)
     expect(tokensUsed[0]).not.toEqual(tokensUsed[1])
+  })
+
+  it('does not retry as someone else when another tab changed who is signed in', async () => {
+    setExpectedUser('u-manager')
+    const changed = vi.fn()
+    window.addEventListener('harbourops:session-changed', changed)
+    const api = mockApi({
+      'POST /api/things': () => problem(400, 'antiforgery_failed', 'Token rejected'),
+      'GET /api/auth/me': () => json(200, { id: 'u-requester' }), // another tab switched persona
+    })
+
+    const error = (await apiRequest('/api/things', { method: 'POST', body: {} }).catch((e: unknown) => e)) as ApiError
+
+    expect(error.code).toBe('session_changed')
+    expect(api.requestsTo('POST', '/api/things')).toHaveLength(1) // never re-sent as the other person
+    expect(changed).toHaveBeenCalledOnce()
+    window.removeEventListener('harbourops:session-changed', changed)
   })
 
   it('gives up after one retry so a persistent failure surfaces to the user', async () => {

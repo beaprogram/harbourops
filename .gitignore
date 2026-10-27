@@ -1,5 +1,9 @@
 # Local environment (copy from .env.example)
 .env
+# Filled-in Bicep parameters (copy from infra/main.parameters.example.json)
+infra/main.parameters.json
+# Local photo storage (Development) and other runtime data
+.data/
 *.local
 
 # .NET
@@ -22,6 +26,7 @@ e2e/test-results/
 e2e/playwright-report/
 e2e/blob-report/
 e2e/.cache/
+e2e/.auth/
 
 # OS / editors
 .DS_Store

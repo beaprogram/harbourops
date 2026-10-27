@@ -4,12 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The manual deploy workflow reruns every check on the exact commit it deploys.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # github.workflow is the *caller's* name when the deploy workflow reuses this file, so a push to main never
+  # cancels the checks of a deployment that is running (and vice versa).
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -41,8 +45,22 @@ jobs:
           dotnet tool restore
           dotnet ef migrations has-pending-model-changes --project backend/HarbourOps.Api --no-build --configuration Release
 
-      - name: Test (unit + Testcontainers PostgreSQL 18)
+      # Includes the Azure Blob adapter against the Azurite emulator (emulator verification, not real Azure)
+      # and SkiaSharp image processing natively on this linux-x64 runner.
+      - name: Test (unit + Testcontainers PostgreSQL 18 + Azurite)
         run: dotnet test --solution backend/HarbourOps.slnx --no-build -c Release
+
+  infrastructure:
+    name: Infrastructure (Bicep build and lint; no Azure sign-in)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compile and lint infra/main.bicep
+        run: |
+          az bicep install --version v0.48.1
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep lint --file infra/main.bicep
 
   frontend:
     name: Frontend (lint, types, Vitest, build)
@@ -66,7 +84,7 @@ jobs:
       - run: npm run build
 
   e2e:
-    name: End-to-end (Docker Compose + Playwright)
+    name: End-to-end, accessibility, and x64 image processing (Docker Compose + Playwright + axe)
     needs: [backend, frontend]
     runs-on: ubuntu-24.04
     steps:
@@ -77,15 +95,22 @@ jobs:
           cp .env.example .env
           sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 
-      - name: Start the stack
+      - name: Build the container image and start the stack
         run: |
           docker compose up -d --build
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             curl -sf http://localhost:8088/health/ready && exit 0
             sleep 2
           done
           docker compose logs app
           exit 1
+
+      # The photo tests below then exercise SkiaSharp inside the real linux/amd64 runtime image.
+      - name: Confirm the app runs as linux/amd64
+        run: |
+          echo "runner: $(uname -m)"
+          docker image inspect harbourops-app --format '{{.Os}}/{{.Architecture}}' | tee platform.txt
+          grep -qx 'linux/amd64' platform.txt
 
       - uses: actions/setup-node@v7
         with:

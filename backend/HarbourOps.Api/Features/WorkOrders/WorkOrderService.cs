@@ -1,18 +1,17 @@
 using HarbourOps.Api.Common;
 using HarbourOps.Api.Data;
+using HarbourOps.Api.Features.Demo.Sandbox;
 using HarbourOps.Api.Features.Users;
 using Microsoft.EntityFrameworkCore;
 
 namespace HarbourOps.Api.Features.WorkOrders;
-
-public sealed record WorkOrderListQuery(int Page, int PageSize, IReadOnlyList<WorkOrderStatus> Statuses);
 
 /// <summary>
 /// Application service for work orders: loads data the user may see, asks
 /// <see cref="WorkOrderWorkflow"/> whether a change is allowed, and saves the change together
 /// with its audit event. HTTP concerns stay in <see cref="WorkOrderEndpoints"/>.
 /// </summary>
-public sealed class WorkOrderService(AppDbContext db, TimeProvider clock, ILogger<WorkOrderService> logger)
+public sealed class WorkOrderService(AppDbContext db, TimeProvider clock, DemoQuotas demoQuotas, ILogger<WorkOrderService> logger)
 {
     private static readonly Failure NotFound = Failure.NotFound("Work order not found.");
 
@@ -21,22 +20,17 @@ public sealed class WorkOrderService(AppDbContext db, TimeProvider clock, ILogge
         "Load the latest version and try again.");
 
     public async Task<PagedResponse<WorkOrderListItem>> ListAsync(
-        CurrentUser user, WorkOrderListQuery query, CancellationToken ct)
+        CurrentUser user, WorkOrderFilter filter, int page, int pageSize, CancellationToken ct)
     {
-        var workOrders = db.WorkOrders.AsNoTracking().VisibleTo(user);
-        if (query.Statuses.Count > 0)
-        {
-            workOrders = workOrders.Where(w => query.Statuses.Contains(w.Status));
-        }
+        // One "now" for the whole response: filters, flags, and AsOf all use the same boundary.
+        var now = clock.GetUtcNow();
+        var matching = db.WorkOrders.AsNoTracking().VisibleTo(user).ApplyFilter(filter, now);
 
-        var totalCount = await workOrders.CountAsync(ct);
-
-        // Newest first, with Id as a tie-breaker so paging is deterministic.
-        var items = await workOrders
-            .OrderByDescending(w => w.CreatedAt)
-            .ThenByDescending(w => w.Id)
-            .Skip((query.Page - 1) * query.PageSize)
-            .Take(query.PageSize)
+        var totalCount = await matching.CountAsync(ct);
+        var items = await matching
+            .ApplySort(filter)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(w => new WorkOrderListItem(
                 w.Id,
                 w.Number,
@@ -50,16 +44,64 @@ public sealed class WorkOrderService(AppDbContext db, TimeProvider clock, ILogge
                 w.CreatedAt,
                 w.UpdatedAt,
                 w.DueAt,
+                false,
                 false))
             .ToListAsync(ct);
 
-        var now = clock.GetUtcNow();
-        var withOverdue = items
-            .Select(i => i with { IsOverdue = WorkOrderDeadlines.IsOverdue(i.Status, i.DueAt, now) })
+        var withDeadlines = items
+            .Select(i => i with
+            {
+                IsOverdue = WorkOrderDeadlines.IsOverdue(i.Status, i.DueAt, now),
+                IsDueSoon = WorkOrderDeadlines.IsDueSoon(i.Status, i.DueAt, now),
+            })
             .ToList();
 
-        var totalPages = (int)Math.Ceiling(totalCount / (double)query.PageSize);
-        return new PagedResponse<WorkOrderListItem>(withOverdue, query.Page, query.PageSize, totalCount, totalPages);
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+        return new PagedResponse<WorkOrderListItem>(withDeadlines, page, pageSize, totalCount, totalPages, now);
+    }
+
+    /// <summary>
+    /// Filter choices limited to what the role may already see: managers get every active property and
+    /// technician in their organization; technicians and requesters only get properties (and, for
+    /// requesters, assigned technicians) that appear on work orders visible to them.
+    /// </summary>
+    public async Task<WorkOrderFilterOptions> GetFilterOptionsAsync(CurrentUser user, int exportRowLimit, CancellationToken ct)
+    {
+        if (user.IsManager)
+        {
+            var properties = await db.Properties.AsNoTracking()
+                .Where(p => p.OrganizationId == user.OrganizationId && p.IsActive)
+                .OrderBy(p => p.Name)
+                .Select(p => new FilterChoice(p.Id, p.Name))
+                .ToArrayAsync(ct);
+            var technicians = await db.Users.AsNoTracking()
+                .Where(u => u.OrganizationId == user.OrganizationId && u.Role == UserRole.Technician && u.IsActive)
+                .OrderBy(u => u.DisplayName)
+                .Select(u => new FilterChoice(u.Id, u.DisplayName))
+                .ToArrayAsync(ct);
+            return new WorkOrderFilterOptions(properties, technicians, CanFilterByTechnician: true, exportRowLimit);
+        }
+
+        var visible = db.WorkOrders.AsNoTracking().VisibleTo(user);
+        var visibleProperties = await visible
+            .Select(w => new { w.Property.Id, w.Property.Name })
+            .Distinct()
+            .OrderBy(p => p.Name)
+            .Select(p => new FilterChoice(p.Id, p.Name))
+            .ToArrayAsync(ct);
+
+        // A technician only ever sees their own work, so a technician filter would be meaningless.
+        FilterChoice[] visibleTechnicians = user.IsRequester
+            ? await visible
+                .Where(w => w.AssignedTechnician != null)
+                .Select(w => new { w.AssignedTechnician!.Id, w.AssignedTechnician.DisplayName })
+                .Distinct()
+                .OrderBy(t => t.DisplayName)
+                .Select(t => new FilterChoice(t.Id, t.DisplayName))
+                .ToArrayAsync(ct)
+            : [];
+
+        return new WorkOrderFilterOptions(visibleProperties, visibleTechnicians, CanFilterByTechnician: user.IsRequester, null);
     }
 
     public async Task<Result<WorkOrderDetailResponse>> GetAsync(CurrentUser user, Guid id, CancellationToken ct)
@@ -85,11 +127,14 @@ public sealed class WorkOrderService(AppDbContext db, TimeProvider clock, ILogge
         }
 
         var w = row.WorkOrder;
+        var now = clock.GetUtcNow();
         return new WorkOrderDetailResponse(
             w.Id, w.Number, w.Title, w.Description, w.Category, w.Priority, w.Status,
             row.Property, row.Requester, row.Technician,
             w.CreatedAt, w.UpdatedAt, w.DueAt,
-            WorkOrderDeadlines.IsOverdue(w.Status, w.DueAt, clock.GetUtcNow()),
+            WorkOrderDeadlines.IsOverdue(w.Status, w.DueAt, now),
+            WorkOrderDeadlines.IsDueSoon(w.Status, w.DueAt, now),
+            now,
             w.ResolutionNote, w.ResolvedAt, w.ClosedAt, w.Version,
             WorkOrderWorkflow.AllowedActions(w, user));
     }
@@ -146,9 +191,20 @@ public sealed class WorkOrderService(AppDbContext db, TimeProvider clock, ILogge
         }
 
         var (workOrder, auditEvent) = created.Value;
+        // Demo personas: the sandbox's request allowance is used in the same transaction as the insert.
+        await using var transaction = user.IsDemo ? await db.Database.BeginTransactionAsync(ct) : null;
+        if (await demoQuotas.TryUseAsync(user, DemoQuota.WorkOrder, ct) is { } limited)
+        {
+            return limited;
+        }
+
         db.WorkOrders.Add(workOrder);
         db.AuditEvents.Add(auditEvent);
         await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(ct);
+        }
 
         logger.LogInformation(
             "Work order {WorkOrderId} created by user {UserId} in organization {OrganizationId}",
@@ -260,11 +316,22 @@ public sealed class WorkOrderService(AppDbContext db, TimeProvider clock, ILogge
         }
 
         db.AuditEvents.Add(outcome.Value!);
+        // Demo personas: the sandbox's workflow allowance is used in the same transaction as the change.
+        await using var transaction = user.IsDemo ? await db.Database.BeginTransactionAsync(ct) : null;
+        if (await demoQuotas.TryUseAsync(user, DemoQuota.Action, ct) is { } limited)
+        {
+            return limited;
+        }
+
         try
         {
             // A single SaveChanges runs in a single database transaction: the UPDATE of the work order
             // (guarded by "WHERE xmin = <version>") and the INSERT of its audit event succeed or fail together.
             await db.SaveChangesAsync(ct);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(ct);
+            }
         }
         catch (DbUpdateConcurrencyException)
         {

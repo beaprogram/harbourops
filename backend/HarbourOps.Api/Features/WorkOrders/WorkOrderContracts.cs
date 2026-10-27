@@ -66,9 +66,27 @@ public sealed record WorkOrderListItem(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset DueAt,
-    bool IsOverdue);
+    bool IsOverdue,
+    bool IsDueSoon);
 
-public sealed record PagedResponse<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount, int TotalPages);
+/// <summary>
+/// One page of results. <c>AsOf</c> is the single "now" used for every deadline flag in the response,
+/// so the client can show relative times ("due in 3 h") that agree with the flags.
+/// </summary>
+public sealed record PagedResponse<T>(
+    IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount, int TotalPages, DateTimeOffset AsOf);
+
+public sealed record FilterChoice(Guid Id, string Name);
+
+/// <summary>
+/// Choices for the list's property and technician filters, limited to what the caller's role may see.
+/// <c>ExportRowLimit</c> is only sent to managers, who are the only role allowed to export.
+/// </summary>
+public sealed record WorkOrderFilterOptions(
+    IReadOnlyList<FilterChoice> Properties,
+    IReadOnlyList<FilterChoice> Technicians,
+    bool CanFilterByTechnician,
+    int? ExportRowLimit);
 
 public sealed record WorkOrderDetailResponse(
     Guid Id,
@@ -85,6 +103,8 @@ public sealed record WorkOrderDetailResponse(
     DateTimeOffset UpdatedAt,
     DateTimeOffset DueAt,
     bool IsOverdue,
+    bool IsDueSoon,
+    DateTimeOffset AsOf,
     string? ResolutionNote,
     DateTimeOffset? ResolvedAt,
     DateTimeOffset? ClosedAt,

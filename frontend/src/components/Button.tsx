@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes } from 'react'
+import type { ComponentProps } from 'react'
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost'
 
@@ -9,7 +9,8 @@ const variants: Record<Variant, string> = {
   ghost: 'text-navy-700 hover:bg-navy-50 disabled:text-slate-400',
 }
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+/** Includes `ref` (React 19 passes it as an ordinary prop), so callers can move focus to a button. */
+interface ButtonProps extends ComponentProps<'button'> {
   variant?: Variant
   busy?: boolean
 }

@@ -32,6 +32,8 @@ export function workOrder(overrides: Partial<WorkOrderDetail> = {}): WorkOrderDe
     updatedAt: '2026-01-15T18:00:00Z',
     dueAt: '2026-01-16T14:00:00Z',
     isOverdue: false,
+    isDueSoon: false,
+    asOf: '2026-01-15T19:00:00Z',
     resolutionNote: 'Bled the radiator and replaced the valve.',
     resolvedAt: '2026-01-15T18:00:00Z',
     closedAt: null,

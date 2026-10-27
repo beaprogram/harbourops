@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { activity, manager, technician, workOrder } from '../../test/fixtures'
-import { json, mockApi, problem, renderApp } from '../../test/utils'
+import { json, mockApi, noAttachments, noComments, problem, renderApp } from '../../test/utils'
 
 describe('WorkOrderDetailPage', () => {
   it('shows only the actions the server allows for this user', async () => {
@@ -9,6 +9,8 @@ describe('WorkOrderDetailPage', () => {
       'GET /api/auth/me': () => json(200, technician),
       'GET /api/work-orders/wo-1': () =>
         json(200, workOrder({ status: 'Assigned', allowedActions: ['Start'], resolutionNote: null, resolvedAt: null })),
+      'GET /api/work-orders/wo-1/comments': noComments,
+      'GET /api/work-orders/wo-1/attachments': noAttachments,
       'GET /api/work-orders/wo-1/activity': () => json(200, activity.slice(0, 1)),
     })
     renderApp('/work-orders/wo-1')
@@ -25,6 +27,8 @@ describe('WorkOrderDetailPage', () => {
       'GET /api/auth/me': () => json(200, manager),
       'GET /api/work-orders/wo-1': () =>
         json(200, ++detailLoads === 1 ? workOrder() : workOrder({ status: 'Closed', closedAt: '2026-01-15T19:00:00Z', allowedActions: [], version: 9 })),
+      'GET /api/work-orders/wo-1/comments': noComments,
+      'GET /api/work-orders/wo-1/attachments': noAttachments,
       'GET /api/work-orders/wo-1/activity': () => json(200, activity),
       'POST /api/work-orders/wo-1/close': () =>
         problem(409, 'stale_version', 'Someone else updated this work order after you loaded it.'),
@@ -49,6 +53,8 @@ describe('WorkOrderDetailPage', () => {
       'GET /api/auth/me': () => json(200, technician),
       'GET /api/work-orders/wo-1': () =>
         json(200, workOrder({ status: 'InProgress', allowedActions: ['Resolve'], resolutionNote: null, resolvedAt: null })),
+      'GET /api/work-orders/wo-1/comments': noComments,
+      'GET /api/work-orders/wo-1/attachments': noAttachments,
       'GET /api/work-orders/wo-1/activity': () => json(200, activity.slice(0, 1)),
     })
     const { user } = renderApp('/work-orders/wo-1')
@@ -63,6 +69,8 @@ describe('WorkOrderDetailPage', () => {
     mockApi({
       'GET /api/auth/me': () => json(200, manager),
       'GET /api/work-orders/wo-1': () => json(200, workOrder()),
+      'GET /api/work-orders/wo-1/comments': noComments,
+      'GET /api/work-orders/wo-1/attachments': noAttachments,
       'GET /api/work-orders/wo-1/activity': () => json(200, activity),
     })
     renderApp('/work-orders/wo-1')
@@ -79,6 +87,7 @@ describe('WorkOrderDetailPage', () => {
     mockApi({
       'GET /api/auth/me': () => json(200, manager),
       'GET /api/work-orders/wo-404': () => problem(404, 'not_found', 'Work order not found.'),
+      'GET /api/work-orders/wo-404/comments': () => problem(404, 'not_found', 'Work order not found.'),
       'GET /api/work-orders/wo-404/activity': () => problem(404, 'not_found', 'Work order not found.'),
     })
     renderApp('/work-orders/wo-404')

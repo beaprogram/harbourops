@@ -34,5 +34,41 @@ public static class DatabaseStartup
 
             await services.GetRequiredService<DemoDataSeeder>().SeedAsync();
         }
+
+        await ReportKeyRingAsync(services, logger);
+    }
+
+    /// <summary>
+    /// Logs how many cookie-encryption keys exist and how many are stored without encryption (never the keys).
+    /// Enabling Key Vault protection only wraps keys created from then on, so older keys stay readable, and
+    /// existing sessions keep working, until an operator retires them (docs/deployment.md, "Data Protection keys").
+    /// </summary>
+    private static async Task ReportKeyRingAsync(IServiceProvider services, ILogger logger)
+    {
+        try
+        {
+            var keys = await services.GetRequiredService<AppDbContext>().DataProtectionKeys.AsNoTracking()
+                .Select(k => k.Xml)
+                .ToListAsync();
+            var unencrypted = keys.Count(xml => xml is not null && !xml.Contains("<encryptedSecret", StringComparison.Ordinal));
+            var keyVault = !string.IsNullOrWhiteSpace(
+                services.GetRequiredService<IConfiguration>()[$"{KeyProtectionOptions.SectionName}:KeyVaultKeyUri"]);
+            if (keyVault && unencrypted > 0)
+            {
+                logger.LogWarning(
+                    "Data Protection key ring: {KeyCount} keys, {UnencryptedCount} created before Key Vault protection and stored unencrypted. " +
+                    "They are kept so existing sessions stay valid; retire them as described in docs/deployment.md once they have expired.",
+                    keys.Count, unencrypted);
+            }
+            else
+            {
+                logger.LogInformation("Data Protection key ring: {KeyCount} keys, {UnencryptedCount} stored unencrypted", keys.Count, unencrypted);
+            }
+        }
+        catch (Exception exception) when (exception is System.Data.Common.DbException or InvalidOperationException)
+        {
+            // Database not reachable or not migrated yet: only this report is skipped; /health/ready reports the cause.
+            logger.LogInformation("Data Protection key ring not readable yet ({Reason})", exception.GetType().Name);
+        }
     }
 }

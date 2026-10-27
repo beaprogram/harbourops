@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "hops-demo" },
+    "githubOidcSubject": { "value": "<the exact sub printed by the Show OIDC subject workflow>" },
+    "appServiceSku": { "value": "B1" },
+    "budgetMonthlyAmount": { "value": 50 },
+    "budgetContactEmails": { "value": [ "<your email for budget alerts>" ] }
+  }
+}

@@ -18,14 +18,26 @@ public abstract class IntegrationTest(PostgresFixture fixture)
     protected Task<ApiClient> SignInAsync(string email) => Factory.SignInAsync(email);
 
     protected static Task<WorkOrderDetailResponse> CreateRequestAsync(
-        ApiClient requester, Guid? propertyId = null, string title = "Leaking radiator valve") =>
+        ApiClient requester, Guid? propertyId = null, string title = "Leaking radiator valve",
+        string description = "Created by an integration test.") =>
         requester.PostJsonAsync<WorkOrderDetailResponse>("/api/work-orders", new
         {
             propertyId = propertyId ?? DemoAccounts.QuaysideLofts,
             title,
-            description = "Created by an integration test.",
+            description,
             category = "Plumbing",
         });
+
+    protected static Task<WorkOrderDetailResponse> SetPriorityAsync(ApiClient manager, WorkOrderDetailResponse workOrder, string priority) =>
+        manager.PostJsonAsync<WorkOrderDetailResponse>(
+            $"/api/work-orders/{workOrder.Id}/priority", new { priority, version = workOrder.Version });
+
+    protected static Task<PagedResponse<WorkOrderListItem>> ListAsync(ApiClient client, string query) =>
+        client.GetJsonAsync<PagedResponse<WorkOrderListItem>>($"/api/work-orders?{query}");
+
+    /// <summary>A word that appears nowhere else, so a search for it isolates one test's records.</summary>
+    protected static string UniqueTag() =>
+        "tag" + string.Concat(Guid.NewGuid().ToString("N")[..12].Select(c => char.IsAsciiDigit(c) ? (char)('g' + (c - '0')) : c));
 
     protected static Task<WorkOrderDetailResponse> AssignAsync(ApiClient manager, WorkOrderDetailResponse workOrder, Guid technicianId) =>
         manager.PostJsonAsync<WorkOrderDetailResponse>(

@@ -6,11 +6,14 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 namespace HarbourOps.Api.Features.Comments;
 
 /// <summary>
-/// A discussion comment on a work order. The table ships in the first migration so the
-/// organization-scoped foreign keys are in place; the comment endpoints arrive in the next milestone.
+/// A plain-text discussion comment on a work order. Comments are deliberately separate from the
+/// workflow: adding one does not change the work order's status, Version, UpdatedAt, or activity history.
+/// Comments are immutable in this release (no edit or delete).
 /// </summary>
 public sealed class Comment
 {
+    public const int BodyMaxLength = 2000;
+
     public Guid Id { get; set; }
     public Guid OrganizationId { get; set; }
     public Guid WorkOrderId { get; set; }
@@ -25,8 +28,9 @@ internal sealed class CommentConfiguration : IEntityTypeConfiguration<Comment>
 {
     public void Configure(EntityTypeBuilder<Comment> builder)
     {
-        builder.ToTable("Comments");
-        builder.Property(c => c.Body).HasMaxLength(WorkOrderConfiguration.NoteMaxLength);
+        builder.ToTable("Comments", t =>
+            t.HasCheckConstraint("CK_Comments_BodyNotBlank", "length(btrim(\"Body\", E' \\t\\n\\r')) > 0"));
+        builder.Property(c => c.Body).HasMaxLength(Comment.BodyMaxLength);
 
         builder.HasOne(c => c.WorkOrder)
             .WithMany()
@@ -40,7 +44,8 @@ internal sealed class CommentConfiguration : IEntityTypeConfiguration<Comment>
             .HasPrincipalKey(u => new { u.OrganizationId, u.Id })
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.HasIndex(c => new { c.OrganizationId, c.WorkOrderId, c.CreatedAt })
-            .HasDatabaseName("IX_Comments_Org_WorkOrder_CreatedAt");
+        // Matches the keyset pagination order exactly: (CreatedAt, Id) within one work order.
+        builder.HasIndex(c => new { c.OrganizationId, c.WorkOrderId, c.CreatedAt, c.Id })
+            .HasDatabaseName("IX_Comments_Org_WorkOrder_CreatedAt_Id");
     }
 }
