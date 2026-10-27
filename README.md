@@ -100,17 +100,19 @@ The local stack also lists shared demo accounts (password `HarbourDemo!2026`) fo
   - **Photo memory:** profiling found glibc keeping freed image buffers. Two allocator settings cut repeated-load memory from 1.3 GB to about 720 MiB ([benchmark](docs/benchmarks/photo-memory/README.md)).
 - **Secure hosting by default.** The hosted configuration refuses to start without Key Vault-wrapped cookie keys, HTTPS-only cookies, and managed-identity storage. Deployment uses GitHub OIDC (no stored secret), behind a manual trigger and a protected environment ([decisions §41–§44](docs/decisions.md)).
 
-## Verification evidence (2026-10-26)
+## Verification evidence (2026-10-27)
+
+Each check passed locally and again in [GitHub Actions run 40544241970](https://github.com/beaprogram/harbourops/actions/runs/40544241970) (commit `9c3c89f`, Ubuntu 24.04 x64 runners).
 
 | Check | Result |
 | --- | --- |
 | Backend: build (warnings as errors), migrations in sync, unit and integration tests on real PostgreSQL 18 and the Azurite emulator | 306 / 306 passed, 0 warnings |
 | Frontend: ESLint, TypeScript strict, Vitest + Testing Library, production build | 58 / 58 passed |
 | Browser: Playwright (end to end, axe accessibility scans, image processing) against the Docker Compose stack | 17 / 17 passed |
-| Linux x64 runtime | Photo processing verified on linux/amd64 under QEMU emulation only. Native x64 runs in CI, which has **not run yet** |
-| Infrastructure | Bicep compiled and linted. Workflows pass actionlint. **Not deployed.** GitHub Actions **never run** (no remote) |
+| Linux x64 runtime | Verified natively in CI: the image ran as `linux/amd64` on an `x86_64` runner, and both photo browser tests passed there. Locally it was only checked under QEMU emulation |
+| Infrastructure | Bicep compiled and linted. Workflows pass actionlint. The protected `production` environment and its OIDC subject are set up on GitHub. **Not deployed:** no Azure resources exist |
 
-[docs/release-checklist.md](docs/release-checklist.md) lists every local check and everything still outstanding.
+[docs/release-checklist.md](docs/release-checklist.md) lists every check, where it ran, and everything still outstanding.
 
 ## Technology
 

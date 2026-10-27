@@ -87,7 +87,7 @@ All are single-machine measurements with documented environments.
 
 ## Limitations, stated plainly
 
-- **Not deployed yet,** and GitHub Actions has never run (no remote). Native Linux x64 image processing has only been checked under emulation locally; CI covers it.
+- **Not deployed yet.** CI passes on GitHub, including native Linux x64 image processing, but no Azure resources exist and the hosted demo has not been smoke-tested.
 - **Screen readers not tested.** Automated scans and scripted keyboard checks are not proof of accessibility.
 - **Demo limits are sized for one instance.**
 - **Database networking** uses a firewalled public endpoint, not private networking.

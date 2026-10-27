@@ -19,7 +19,7 @@ Completed work is listed separately from planned work. Every "Done" row names th
 | Due-date calculation with an injectable clock | Done | `WorkOrderDeadlinesTests`, `DeadlineApiTests` |
 | Responsive, accessible UI (login, list, create, detail, technician queue) | Done | Component tests, Playwright, manual screenshots at 1280 px and 390 px |
 | Problem Details errors, OpenAPI (Development), health checks, request size limit, login rate limit, structured logging, security headers | Done | `AuthenticationTests` (401 shape, 429), manual checks against the Compose stack |
-| Docker Compose, GitHub Actions, Azure deployment guide | Done | Compose stack and Playwright run locally; the CI workflow is written but has not run on GitHub yet |
+| Docker Compose, GitHub Actions, Azure deployment guide | Done | Compose stack and Playwright run locally and in GitHub Actions CI |
 
 ## Milestone 2: managers' questions (implemented)
 
@@ -72,7 +72,7 @@ Completed work is listed separately from planned work. Every "Done" row names th
 | Isolated public demo | Per-visitor sandboxes: a private pair of fictional organizations, four personas chosen by key, a server-issued credential, a fixed one-hour lifetime enforced on every request, reset and end for the caller's own sandbox only, database-enforced capacity and per-sandbox limits, and idempotent background cleanup. Banner, persona switcher, and an accessible ended screen ([decisions §37–§39](decisions.md)) |
 | Protected cookie-encryption keys | Key ring stays in PostgreSQL; new keys are wrapped by a Key Vault key through a managed identity. The hosted configuration refuses to start without it. Startup reports unencrypted keys, with an explicit retirement plan ([§41](decisions.md), [deployment §11](deployment.md#11-data-protection-keys-key-vault-wrapping)) |
 | Deployment | Azure Blob storage adapter (tested on Azurite). Bicep for App Service, PostgreSQL 18, Blob, Key Vault, ACR, Log Analytics, and managed identities. Manual, approval-gated deploy workflow with GitHub OIDC. EF migration bundle as a release step. Least-privilege database role. Runbook, rollback, teardown, and a dated cost estimate (about US$36 a month) |
-| Memory and platform | Measured upload memory, bounded the upload queue, and fixed native memory growth with allocator settings ([benchmark](benchmarks/photo-memory/README.md)). Linux x64 image processing checked under emulation; native x64 is covered by CI |
+| Memory and platform | Measured upload memory, bounded the upload queue, and fixed native memory growth with allocator settings ([benchmark](benchmarks/photo-memory/README.md)). Linux x64 image processing checked under emulation locally and natively in CI |
 | Portfolio presentation | README for reviewers, [case study](portfolio-case-study.md), [demo script](demo-script.md), [interview notes](interview-notes.md), [release checklist](release-checklist.md), new screenshots |
 
 **Found and fixed along the way:**
@@ -84,7 +84,6 @@ Completed work is listed separately from planned work. Every "Done" row names th
 
 **Still outstanding** (see the [release checklist](release-checklist.md)):
 
-- The first GitHub Actions run, including native x64 image processing.
 - The real Azure deployment and its smoke test.
 - Screen-reader testing.
 

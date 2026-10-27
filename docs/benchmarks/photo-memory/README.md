@@ -112,7 +112,7 @@ This Mac has no x64 hardware, so the x64 build was checked under QEMU user-mode 
 | Sustained load, 3 rounds | 54 of 54 created |
 | Burst | 6 created, 6 `uploads_busy` |
 
-**Not representative:** memory (961 MiB peak) and timing (12–53 s per upload) include the emulator and must not be used for sizing. **Native x64 verification** is the CI `e2e` job: the image runs as `linux/amd64` on an x64 runner, and `photo-processing.spec.ts` checks orientation and metadata removal there. That job has **not run yet**.
+**Not representative:** memory (961 MiB peak) and timing (12–53 s per upload) include the emulator and must not be used for sizing. **Native x64 verification** is the CI `e2e` job: the image runs as `linux/amd64` on an x64 runner, and `photo-processing.spec.ts` checks orientation and metadata removal there. It passed on 2026-10-27 ([run 40544241970](https://github.com/beaprogram/harbourops/actions/runs/40544241970)): the runner reported `x86_64`, the image `linux/amd64`, and both photo specs passed. That run checks correctness, not memory: x64 memory on Azure is still to be watched (release checklist, item 6).
 
 ## Reproducing
 

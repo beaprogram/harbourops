@@ -7,18 +7,18 @@ This is the runbook for one deployment path:
 - **Key Vault** for the cookie-encryption key and connection strings;
 - **managed identities**, plus GitHub **OIDC** for deployment.
 
-**Nothing in this repository has been deployed.** No Azure resource has been created, and GitHub Actions has never run (there is no remote). Every command below is for you to run when you decide to pay for hosting, and every `<placeholder>` must be replaced.
+**Nothing in this repository has been deployed.** No Azure resource has been created, and the deploy workflow has never run. CI runs on GitHub, and the `production` environment and its OIDC subject are set up (§1, §5). Every command below is for you to run when you decide to pay for hosting, and every `<placeholder>` must be replaced.
 
 ## 1. What is verified, and how
 
 | Area | Local (this machine) | Emulator | CI (GitHub Actions) | Real Azure |
 | --- | --- | --- | --- | --- |
-| App, sandboxes, photos, tests | Yes: 306 backend, 58 frontend, 17 browser tests | | Configured, **not run** | **Not run** |
-| Linux x64 image processing | Under QEMU emulation only (17/17 smoke checks) | | `e2e` job on an x64 runner, **not run** | **Not run** |
-| Blob Storage adapter | | Azurite 3.37 (9 tests) | Configured, **not run** | **Not run** |
+| App, sandboxes, photos, tests | Yes: 306 backend, 58 frontend, 17 browser tests | | **Passed**, same counts ([run 40544241970](https://github.com/beaprogram/harbourops/actions/runs/40544241970), 2026-10-27) | **Not run** |
+| Linux x64 image processing | Under QEMU emulation (17/17 smoke checks) | | **Passed natively:** `linux/amd64` image on an `x86_64` runner, both photo browser tests | **Not run** |
+| Blob Storage adapter | | Azurite 3.37 (9 tests) | **Passed** against Azurite (still emulator evidence) | **Not run** |
 | Key Vault key wrapping | Wiring only (which encryptor is used) | No Key Vault emulator exists | | **Not run** |
-| Bicep templates | Compiled and linted (Bicep 0.48.1) | | `infrastructure` job, **not run** | **Not deployed** |
-| Workflows (`ci.yml`, `deploy.yml`, `oidc-subject.yml`) | actionlint 1.7.12 clean | | **Not run** | |
+| Bicep templates | Compiled and linted (Bicep 0.48.1) | | `infrastructure` job **passed** | **Not deployed** |
+| Workflows (`ci.yml`, `deploy.yml`, `oidc-subject.yml`) | actionlint 1.7.12 clean | | `ci.yml` and `oidc-subject.yml` **ran**; `deploy.yml` **not run** (it needs Azure) | |
 | Migrations and the least-privilege role | Rehearsed on PostgreSQL 18.6 in Docker | | | **Not run** |
 
 ## 2. Shape
@@ -50,6 +50,8 @@ Everything is defined in [`infra/main.bicep`](../infra/main.bicep), with one mod
 **Sources:** retail prices are from the [Azure Retail Prices API](https://prices.azure.com/api/retail/prices). The pricing pages for [App Service (Linux)](https://azure.microsoft.com/pricing/details/app-service/linux/), [PostgreSQL Flexible Server](https://azure.microsoft.com/pricing/details/postgresql/flexible-server/), [Blob Storage](https://azure.microsoft.com/pricing/details/storage/blobs/), [Key Vault](https://azure.microsoft.com/pricing/details/key-vault/), [Container Registry](https://azure.microsoft.com/pricing/details/container-registry/), [Azure Monitor](https://azure.microsoft.com/pricing/details/monitor/), and [Bandwidth](https://azure.microsoft.com/pricing/details/bandwidth/) explain the meters.
 
 **Assumptions:** a month is 730 hours, everything runs all month, no reservations or savings plans, light demo traffic, and prices exclude tax.
+
+**Rechecked on 2026-10-27:** every meter below is unchanged. If your account is billed in Canadian dollars, the API's CAD prices for the same meters total about **CA$51 a month**: B1 CA$18.61, B1ms CA$19.13, 32 GB storage CA$5.73, and the registry CA$7.18.
 
 | Resource | Meter | Monthly |
 | --- | --- | --- |
