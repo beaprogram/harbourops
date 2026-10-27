@@ -22,8 +22,15 @@ env:
 
 jobs:
   backend:
-    name: Backend (build, migrations check, xUnit + PostgreSQL)
+    name: Backend on ${{ matrix.postgres }} (build, migrations check, xUnit + PostgreSQL)
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 matches docker-compose; 17 is the major version Supabase hosts the free public demo on.
+        postgres: ["postgres:18.6-alpine", "postgres:17.11-alpine"]
+    env:
+      HARBOUROPS_TEST_POSTGRES_IMAGE: ${{ matrix.postgres }}
     steps:
       - uses: actions/checkout@v7
 
@@ -45,9 +52,10 @@ jobs:
           dotnet tool restore
           dotnet ef migrations has-pending-model-changes --project backend/HarbourOps.Api --no-build --configuration Release
 
-      # Includes the Azure Blob adapter against the Azurite emulator (emulator verification, not real Azure)
-      # and SkiaSharp image processing natively on this linux-x64 runner.
-      - name: Test (unit + Testcontainers PostgreSQL 18 + Azurite)
+      # Includes the Azure Blob adapter against the Azurite emulator and the Supabase adapter against Supabase's
+      # open-source Storage API server (both emulator verification, not the hosted services), and SkiaSharp image
+      # processing natively on this linux-x64 runner.
+      - name: Test (unit + Testcontainers PostgreSQL + Azurite + Supabase Storage API)
         run: dotnet test --solution backend/HarbourOps.slnx --no-build -c Release
 
   infrastructure:

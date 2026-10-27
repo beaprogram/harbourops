@@ -1,9 +1,12 @@
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Azure.Core;
 using Azure.Identity;
 using HarbourOps.Api.Features.Attachments;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace HarbourOps.Api.Common;
 
@@ -45,6 +48,16 @@ public sealed class KeyProtectionOptions
     /// https://&lt;vault&gt;.vault.azure.net/keys/dataprotection. Empty: keys are stored unencrypted (local development).
     /// </summary>
     public string? KeyVaultKeyUri { get; set; }
+
+    /// <summary>
+    /// For hosts without Key Vault (the free Render deployment): a base64 PKCS#12 certificate with its private key.
+    /// New keys are encrypted to it before they are stored, so the database alone never reveals them. The host
+    /// supplies it as a secret environment variable. Use either this or <see cref="KeyVaultKeyUri"/>, not both.
+    /// </summary>
+    public string? CertificateBase64 { get; set; }
+
+    /// <summary>The previous certificate during a rotation: still accepted for decrypting older keys, never for new ones.</summary>
+    public string? PreviousCertificateBase64 { get; set; }
 }
 
 /// <summary>Bound from the "Hosting" section.</summary>
@@ -65,8 +78,13 @@ public static class HostingConfiguration
     public static IEnumerable<string> SecureConfigurationProblems(IConfiguration configuration)
     {
         var keys = configuration.GetSection(KeyProtectionOptions.SectionName).Get<KeyProtectionOptions>() ?? new();
-        if (!Uri.TryCreate(keys.KeyVaultKeyUri, UriKind.Absolute, out var keyUri) || keyUri.Scheme != Uri.UriSchemeHttps)
-            yield return "DataProtection:KeyVaultKeyUri must be the https URL of a Key Vault key, so cookie-encryption keys are encrypted at rest.";
+        var keyVault = Uri.TryCreate(keys.KeyVaultKeyUri, UriKind.Absolute, out var keyUri) && keyUri.Scheme == Uri.UriSchemeHttps;
+        if (!keyVault && !KeyProtectionCertificates.IsUsable(keys.CertificateBase64))
+            yield return "DataProtection needs KeyVaultKeyUri (the https URL of a Key Vault key) or CertificateBase64 (a PKCS#12 " +
+                         "certificate with its private key), so cookie-encryption keys are encrypted at rest.";
+
+        if (!RequiresVerifiedTls(configuration.GetConnectionString("Default")))
+            yield return "ConnectionStrings:Default must use SSL Mode=VerifyFull, so the database connection is encrypted and the server is verified.";
 
         var security = configuration.GetSection(SecurityOptions.SectionName).Get<SecurityOptions>() ?? new();
         if (security.CookieSecurePolicy != CookieSecurePolicy.Always)
@@ -79,17 +97,40 @@ public static class HostingConfiguration
             yield return "Database:ApplyMigrationsOnStartup must be false: migrations run as a separate, controlled release step.";
 
         var storage = configuration.GetSection("Attachments:Storage").Get<AttachmentStorageOptions>() ?? new();
-        if (storage.Provider != AttachmentStorageOptions.AzureBlobProvider || string.IsNullOrWhiteSpace(storage.AzureBlob.ServiceUri)
-            || !string.IsNullOrWhiteSpace(storage.AzureBlob.ConnectionString))
-            yield return "Attachments:Storage must use AzureBlob with a ServiceUri (managed identity) and no connection string.";
+        var privateStorage = storage.Provider switch
+        {
+            AttachmentStorageOptions.AzureBlobProvider =>
+                !string.IsNullOrWhiteSpace(storage.AzureBlob.ServiceUri) && string.IsNullOrWhiteSpace(storage.AzureBlob.ConnectionString),
+            AttachmentStorageOptions.SupabaseProvider =>
+                Uri.TryCreate(storage.Supabase.Url, UriKind.Absolute, out var supabaseUri) && supabaseUri.Scheme == Uri.UriSchemeHttps
+                && !string.IsNullOrWhiteSpace(storage.Supabase.ServiceKey) && !storage.Supabase.CreateBucketIfMissing,
+            _ => false,
+        };
+        if (!privateStorage)
+            yield return "Attachments:Storage must use AzureBlob with a ServiceUri (managed identity) and no connection string, " +
+                         "or Supabase with an https Url, a secret ServiceKey, and a bucket created private in advance.";
 
         if (configuration.GetValue<bool>("Azure:UseDeveloperCredential"))
             yield return "Azure:UseDeveloperCredential must be false: hosted environments authenticate with a managed identity.";
     }
 
+    private static bool RequiresVerifiedTls(string? connectionString)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(connectionString)
+                   && new NpgsqlConnectionStringBuilder(connectionString).SslMode == SslMode.VerifyFull;
+        }
+        catch (ArgumentException)
+        {
+            return false; // unparseable: reported as a problem, without echoing the string (it holds a password)
+        }
+    }
+
     /// <summary>
     /// Persistent keys in PostgreSQL (unchanged since milestone 1), a stable application name, and, when
-    /// configured, every new key wrapped by a Key Vault key through the app's managed identity.
+    /// configured, every new key wrapped by a Key Vault key through the app's managed identity, or encrypted to
+    /// a certificate supplied by the host.
     /// </summary>
     public static IServiceCollection AddHarbourDataProtection<TContext>(this IServiceCollection services, IConfiguration configuration)
         where TContext : Microsoft.EntityFrameworkCore.DbContext, Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.IDataProtectionKeyContext
@@ -98,13 +139,75 @@ public static class HostingConfiguration
         var builder = services.AddDataProtection()
             .SetApplicationName(options.ApplicationName)
             .PersistKeysToDbContext<TContext>();
-        if (!string.IsNullOrWhiteSpace(options.KeyVaultKeyUri))
+        var keyVault = !string.IsNullOrWhiteSpace(options.KeyVaultKeyUri);
+        var certificate = !string.IsNullOrWhiteSpace(options.CertificateBase64);
+        if (keyVault && certificate)
+        {
+            throw new InvalidOperationException("Configure DataProtection:KeyVaultKeyUri or DataProtection:CertificateBase64, not both.");
+        }
+
+        if (keyVault)
         {
             var azure = configuration.GetSection(AzureOptions.SectionName).Get<AzureOptions>() ?? new();
-            builder.ProtectKeysWithAzureKeyVault(new Uri(options.KeyVaultKeyUri), azure.CreateCredential());
+            builder.ProtectKeysWithAzureKeyVault(new Uri(options.KeyVaultKeyUri!), azure.CreateCredential());
+        }
+        else if (certificate)
+        {
+            var current = KeyProtectionCertificates.Load(options.CertificateBase64!, "DataProtection:CertificateBase64");
+            var decryptors = string.IsNullOrWhiteSpace(options.PreviousCertificateBase64)
+                ? [current]
+                : new[] { current, KeyProtectionCertificates.Load(options.PreviousCertificateBase64, "DataProtection:PreviousCertificateBase64") };
+            builder.ProtectKeysWithCertificate(current).UnprotectKeysWithAnyCertificate(decryptors);
         }
 
         return services;
+    }
+}
+
+/// <summary>Loads the certificates that protect the Data Protection key ring when Key Vault isn't available.</summary>
+public static class KeyProtectionCertificates
+{
+    /// <summary>Loads a base64 PKCS#12 certificate that has an RSA private key of at least 2048 bits.</summary>
+    public static X509Certificate2 Load(string base64, string settingName)
+    {
+        X509Certificate2 certificate;
+        try
+        {
+            certificate = X509CertificateLoader.LoadPkcs12(
+                Convert.FromBase64String(base64.Trim()), password: null);
+        }
+        catch (Exception exception) when (exception is FormatException or CryptographicException)
+        {
+            // The setting's name only: the value is key material.
+            throw new InvalidOperationException($"{settingName} is not a base64 PKCS#12 certificate without a password.", exception);
+        }
+
+        using var rsa = certificate.GetRSAPrivateKey();
+        if (rsa is null || rsa.KeySize < 2048)
+        {
+            certificate.Dispose();
+            throw new InvalidOperationException($"{settingName} must include an RSA private key of at least 2048 bits.");
+        }
+
+        return certificate;
+    }
+
+    public static bool IsUsable(string? base64)
+    {
+        if (string.IsNullOrWhiteSpace(base64))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var certificate = Load(base64, "certificate");
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 }
 

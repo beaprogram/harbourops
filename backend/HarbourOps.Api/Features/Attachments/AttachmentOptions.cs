@@ -58,8 +58,11 @@ public sealed class AttachmentOptions
             case AttachmentStorageOptions.AzureBlobProvider:
                 foreach (var error in Storage.AzureBlob.Validate()) yield return error;
                 break;
+            case AttachmentStorageOptions.SupabaseProvider:
+                foreach (var error in Storage.Supabase.Validate()) yield return error;
+                break;
             default:
-                yield return "Attachments:Storage:Provider must be 'Local' or 'AzureBlob'.";
+                yield return "Attachments:Storage:Provider must be 'Local', 'AzureBlob', or 'Supabase'.";
                 break;
         }
         if (Cleanup.MinimumAge < TimeSpan.FromHours(1)) yield return "Attachments:Cleanup:MinimumAge must be at least one hour.";
@@ -70,14 +73,51 @@ public sealed class AttachmentStorageOptions
 {
     public const string LocalProvider = "Local";
     public const string AzureBlobProvider = "AzureBlob";
+    public const string SupabaseProvider = "Supabase";
 
-    /// <summary>"Local" (a private directory) or "AzureBlob" (a private Blob Storage container).</summary>
+    /// <summary>
+    /// "Local" (a private directory), "AzureBlob" (a private Blob Storage container), or "Supabase" (a private
+    /// Supabase Storage bucket).
+    /// </summary>
     public string Provider { get; set; } = LocalProvider;
 
     /// <summary>Private directory for stored photos. Relative paths resolve against the app's content root.</summary>
     public string LocalPath { get; set; } = string.Empty;
 
     public AzureBlobStorageOptions AzureBlob { get; set; } = new();
+
+    public SupabaseStorageOptions Supabase { get; set; } = new();
+}
+
+public sealed partial class SupabaseStorageOptions
+{
+    /// <summary>The project's Storage API URL: https://&lt;project-ref&gt;.supabase.co/storage/v1.</summary>
+    public string? Url { get; set; }
+
+    /// <summary>
+    /// A secret API key (sb_secret_…) used only by this server. It acts as Supabase's service_role, so it is never
+    /// sent to browsers, logged, or committed; the host supplies it as a secret environment variable.
+    /// </summary>
+    public string? ServiceKey { get; set; }
+
+    /// <summary>A private bucket used only for photos.</summary>
+    public string Bucket { get; set; } = "photos";
+
+    /// <summary>Create the bucket (private) if it is missing: tests against the local storage server only.</summary>
+    public bool CreateBucketIfMissing { get; set; }
+
+    public IEnumerable<string> Validate()
+    {
+        if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            yield return "Attachments:Storage:Supabase:Url must be the Storage API URL, https://<project-ref>.supabase.co/storage/v1.";
+        if (string.IsNullOrWhiteSpace(ServiceKey))
+            yield return "Attachments:Storage:Supabase:ServiceKey must be set (a secret key, supplied by the host).";
+        if (!BucketPattern().IsMatch(Bucket))
+            yield return "Attachments:Storage:Supabase:Bucket must be 3-63 lowercase letters, digits, and hyphens.";
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex("^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")]
+    private static partial System.Text.RegularExpressions.Regex BucketPattern();
 }
 
 public sealed partial class AzureBlobStorageOptions

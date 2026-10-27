@@ -1,0 +1,64 @@
+# Render Blueprint for the free public demo (docs/deployment-render.md).
+#
+# The container runs on a Render Free web service (0.1 CPU, 512 MB, sleeps after 15 idle minutes). PostgreSQL and
+# private photo storage are a Supabase Free project. Nothing here is a secret: values marked "sync: false" are
+# entered in Render once and are never stored in this repository.
+#
+# The image is the one the "Deploy to Render" workflow built, tested, and pushed. Each release is pinned by digest
+# through the service's deploy hook; ":production" always points at the last released digest, so a redeploy that
+# Render starts on its own (for example after a settings change) runs the same tested image.
+services:
+  - type: web
+    name: harbourops-demo
+    runtime: image
+    image:
+      url: ghcr.io/beaprogram/harbourops:production
+    plan: free
+    region: virginia # next to the Supabase project (AWS us-east-1); every request makes several database round trips
+    numInstances: 1
+    healthCheckPath: /health/ready
+    envVars:
+      # appsettings.PublicDemo.json: demo sandboxes on, shared accounts off, the secure-configuration guard on.
+      - key: ASPNETCORE_ENVIRONMENT
+        value: PublicDemo
+      # Render terminates TLS and forwards X-Forwarded-Proto/For (HTTPS detection, Secure cookies, per-IP limits).
+      - key: ASPNETCORE_FORWARDEDHEADERS_ENABLED
+        value: "true"
+      - key: PORT
+        value: "8080"
+
+      # Secrets (entered in Render; see the runbook for how each is made):
+      # Supabase session pooler as harbourops_app, with "SSL Mode=VerifyFull" and the Supabase root CA in the image.
+      - key: ConnectionStrings__Default
+        sync: false
+      # base64 PKCS#12 certificate that encrypts the cookie keys stored in PostgreSQL (no Key Vault on this host).
+      - key: DataProtection__CertificateBase64
+        sync: false
+      # A Supabase secret key used only by this service, for the private photo bucket.
+      - key: Attachments__Storage__Supabase__ServiceKey
+        sync: false
+
+      - key: Attachments__Storage__Provider
+        value: Supabase
+      # https://<project-ref>.supabase.co/storage/v1 (not secret, but specific to the project).
+      - key: Attachments__Storage__Supabase__Url
+        sync: false
+      - key: Attachments__Storage__Supabase__Bucket
+        value: demo-photos
+
+      # Free-plan limits (docs/deployment-render.md, "Limits"). Supabase Free stores 1 GB of files and a 500 MB
+      # database: 20 sandboxes x 25 MiB of photos each is at most 500 MiB, and creation is rate-limited.
+      - key: DemoSandbox__MaxActiveSandboxes
+        value: "20"
+      - key: DemoSandbox__MaxCreationsPerHour
+        value: "60"
+      # Photos at 0.1 CPU and 512 MiB (docs/benchmarks/photo-memory, "Render Free limits"). The hosted default
+      # (40 MP, four waiting uploads) peaked at 473 MiB and left queued uploads waiting up to 471 s, longer than the
+      # edge proxy waits. With 24 MP, one decode, and one waiting upload: 307 MiB peak, flat across rounds, and
+      # 9-18 s per accepted upload; further uploads get an immediate 503 "uploads_busy" with Retry-After.
+      - key: Attachments__MaxPixels
+        value: "24000000"
+      - key: Attachments__MaxConcurrentProcessing
+        value: "1"
+      - key: Attachments__MaxQueuedUploads
+        value: "1"

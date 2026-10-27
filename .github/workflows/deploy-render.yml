@@ -1,0 +1,161 @@
+name: Deploy to Render (free public demo)
+
+# Runs only when someone starts it by hand (Actions → "Deploy to Render (free public demo)" → Run workflow). Adding
+# or changing this file never deploys anything. The deploy job uses the protected "production" environment: its
+# required reviewer approves every deployment before the job can read the environment's secrets.
+#
+# Hosting: a Render Free web service runs the container; a Supabase Free project holds PostgreSQL and the private
+# photo bucket (docs/deployment-render.md). Neither offers OIDC federation, so two environment secrets exist,
+# both readable only by this approved job:
+#   SUPABASE_MIGRATOR_CONNECTION  harbourops_owner's pooler connection, for migrations
+#   RENDER_DEPLOY_HOOK_URL        the Render service's deploy hook (it can only trigger deploys of that service)
+# The image is pushed with this run's GITHUB_TOKEN, so no registry credential is stored.
+#
+# The image that is tested is the image that is deployed: built once, exercised by the browser tests on this x64
+# runner, pushed, and released by its immutable digest (not a tag).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Full CI on the commit being deployed
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Build, test the image, migrate, and release
+    needs: checks
+    # Defence in depth next to the environment's deployment-branch rule: only main or a release tag.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    permissions:
+      contents: read
+      packages: write # push the tested image to ghcr.io; nothing else
+    env:
+      REPOSITORY: ghcr.io/beaprogram/harbourops
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      # Actions in this job are pinned to commit SHAs because the job can read deployment secrets.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the release image (linux/amd64, commit baked in)
+        run: |
+          docker build --platform linux/amd64 --build-arg SOURCE_VERSION="${{ github.sha }}" \
+            -t "$REPOSITORY:${{ github.sha }}" -t harbourops-app:latest .
+          docker image inspect harbourops-app:latest --format '{{.Os}}/{{.Architecture}}' | tee platform.txt
+          grep -qx 'linux/amd64' platform.txt
+
+      - name: Start that exact image with a throwaway database
+        run: |
+          cp .env.example .env
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+          docker compose up -d --no-build
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8088/health/ready > /dev/null && exit 0
+            sleep 2
+          done
+          docker compose logs app
+          exit 1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Browser tests against the image about to be released
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test tests/photo-processing.spec.ts tests/photos.spec.ts tests/demo-sandbox.spec.ts tests/workflow.spec.ts
+
+      - name: Stop the throwaway stack
+        if: always()
+        run: docker compose down -v
+
+      - name: Push the tested image and record its digest
+        id: image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "$REPOSITORY:${{ github.sha }}"
+          digest=$(docker image inspect "$REPOSITORY:${{ github.sha }}" --format '{{index .RepoDigests 0}}')
+          case "$digest" in "$REPOSITORY@sha256:"*) ;; *) echo "Unexpected digest reference: $digest"; exit 1 ;; esac
+          echo "reference=$digest" >> "$GITHUB_OUTPUT"
+          echo "Image: \`$digest\` (commit ${{ github.sha }})" >> "$GITHUB_STEP_SUMMARY"
+          # Render pulls without credentials, so the package must be public (the source already is).
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:beaprogram/harbourops:pull" | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/beaprogram/harbourops/manifests/${digest#*@}")
+          [ "$code" = 200 ] || { echo "::error::The ghcr.io package is not publicly readable (HTTP $code). Make it public in the package settings."; exit 1; }
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the migration bundle
+        env:
+          ConnectionStrings__Default: Host=localhost;Database=design_time_only # design time only; never connects
+        run: |
+          dotnet tool restore
+          dotnet ef migrations bundle --project backend/HarbourOps.Api --configuration Release \
+            --self-contained -r linux-x64 -o efbundle --force
+
+      - name: Apply migrations (controlled release step, as harbourops_owner)
+        env:
+          # From the environment, not the command line. The secret holds host, port, database, username, password;
+          # TLS is always verified here, against Supabase's root CA committed in the repository.
+          ConnectionStrings__Default: ${{ secrets.SUPABASE_MIGRATOR_CONNECTION }};SSL Mode=VerifyFull;Root Certificate=${{ github.workspace }}/infra/supabase/supabase-root-2021-ca.crt
+        run: ./efbundle
+
+      - name: Point the production tag at the tested digest
+        run: |
+          docker tag "$REPOSITORY:${{ github.sha }}" "$REPOSITORY:production"
+          docker push "$REPOSITORY:production"
+
+      - name: Release that digest on Render
+        id: release
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            # First run only: the service doesn't exist yet. It is created from render.yaml and starts from
+            # :production, which now points at this tested digest.
+            echo "No deploy hook yet: create the Render service from render.yaml, then add RENDER_DEPLOY_HOOK_URL." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          encoded=$(python3 -c "import os, urllib.parse; print(urllib.parse.quote(os.environ['IMAGE_REFERENCE'], safe=''))")
+          # The hook URL is a credential: it goes to curl through a config on stdin, never on the command line.
+          code=$(printf 'url = "%s&imgURL=%s"\n' "$RENDER_DEPLOY_HOOK_URL" "$encoded" | curl -s -X POST -o /dev/null -w '%{http_code}' --config -)
+          [ "$code" = 200 ] || { echo "::error::Render refused the deploy (HTTP $code)."; exit 1; }
+          echo "released=true" >> "$GITHUB_OUTPUT"
+
+      - name: Wait until the new version is serving
+        if: steps.release.outputs.released == 'true'
+        run: |
+          # A free instance pulls the image and may be waking from sleep, so this allows up to 15 minutes.
+          for _ in $(seq 1 90); do
+            version=$(curl -fsS "${{ vars.APP_URL }}/health/version" | python3 -c "import json,sys; print(json.load(sys.stdin)['version'])" || true)
+            if [ "$version" = "${{ github.sha }}" ] && curl -fsS "${{ vars.APP_URL }}/health/ready" > /dev/null; then
+              status=$(curl -fsS "${{ vars.APP_URL }}/api/demo/session" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])")
+              [ "$status" = "none" ] && echo "Version ${{ github.sha }} is ready and the demo endpoint answers." && exit 0
+            fi
+            sleep 10
+          done
+          echo "The new version did not become ready. Roll back to the previous digest (docs/deployment-render.md, rollback)."
+          exit 1

@@ -55,11 +55,11 @@ Repository: [beaprogram/harbourops](https://github.com/beaprogram/harbourops) (p
 | # | Item | How |
 | --- | --- | --- |
 | 1 | **First GitHub Actions run** (backend, frontend, Bicep, end to end and accessibility) | **Done** on 2026-10-27, including native linux/amd64 photo processing (see *In CI* above) |
-| 2 | Provision Azure | [deployment.md §6–§7](deployment.md): Bicep with the subject above, then the database role and the environment variables. The GitHub `production` environment is already set up |
-| 3 | First deployment | Manual run of `deploy.yml`; it waits for `/health/version` to report the commit |
-| 4 | Hosted smoke test | Try the demo, switch persona, upload a photo (confirm it lands in the `demo-photos` container and is not publicly readable), export, reset, end. Then check the logs for errors, and confirm `AppServiceHTTPLogs` is off |
-| 5 | Key Vault in practice | The startup log reports 0 unencrypted keys; `/health/ready` passes; a key rotation is followed by sign-in still working |
-| 6 | Memory on Azure B1 | Watch the plan's memory metric under a few demo sessions; compare with the 496 MiB local peak |
+| 2 | Supabase and Render setup (the free host, decisions §46) | [deployment-render.md §6](deployment-render.md): Supabase project with the Data API off, roles from `infra/supabase/`, private bucket, Supabase CA committed; Render service from `render.yaml` with no payment method on either account. Azure ([deployment.md](deployment.md)) is not used |
+| 3 | First deployment | Manual run of `deploy-render.yml`; it releases the tested digest and waits for `/health/version` to report the commit |
+| 4 | Hosted smoke test | HTTPS and build identity; two sandboxes in separate browser contexts; persona switching and the stale-tab guard; request → assign → resolve → close; comments, dashboard, search, filters, CSV export; photo upload, preview, and download; cross-organization and cross-sandbox 404s; reset and end; shared-password accounts refused. Then the logs: no errors, no secrets |
+| 5 | Protected keys and persistence in practice | Every stored Data Protection key is encrypted; after a controlled restart, an existing session and its photos still work |
+| 6 | Memory on Render Free | Render's memory metric during bounded uploads; compare with the 307 MiB local peak at the same limits |
 | 7 | Screen readers | Run the checklist in [accessibility.md](accessibility.md) with VoiceOver and NVDA |
 | 8 | README live link | Add only after items 3 and 4 pass |
 
@@ -68,7 +68,7 @@ The repository licence was decided on 2026-10-27: [MIT](../LICENSE), Copyright (
 ## Release-day order
 
 1. CI is green on the commit (item 1).
-2. Provision (item 2) and create the database role.
+2. Set up Supabase and Render (item 2).
 3. Deploy (item 3) and smoke-test (items 4–6).
-4. Add the live link to the README.
-5. If anything fails, roll back by pointing the web app at the previous image digest (deployment §13). Migrations are additive, so the previous image still runs.
+4. Add the live link to the README, tag the deployed commit, and publish release notes.
+5. If anything fails, roll back to the previous digest (deployment-render.md §8). Migrations are additive, so the previous image still runs.

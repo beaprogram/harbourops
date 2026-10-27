@@ -49,7 +49,7 @@ These run on a developer's machine or a CI runner. npm and NuGet download them a
 | lightningcss 1.32.0 and 1.33.0 (CSS transformer that Vite and Tailwind run during the build) | MPL-2.0, see below |
 | caniuse-lite (browser-support data that Babel's browserslist reads inside the ESLint React Hooks plugin) | CC-BY-4.0. Read during linting; none of it is in any build output |
 | Vite, Vitest, ESLint, Testing Library, jsdom, and the other frontend dev dependencies | MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, BlueOak-1.0.0, CC0-1.0, or MIT-0 |
-| Container images used in tests: `postgres:18.6-alpine` (PostgreSQL License) and `mcr.microsoft.com/azure-storage/azurite:3.37.0` (MIT) | As stated |
+| Container images used in tests:<ul><li>`postgres:18.6-alpine` and `postgres:17.11-alpine` (PostgreSQL License)</li><li>`mcr.microsoft.com/azure-storage/azurite:3.37.0` (MIT)</li><li>`supabase/storage-api:v1.81.4`, Supabase's Storage API server (Apache-2.0)</li></ul>Pulled by Testcontainers at test time; none is redistributed | As stated |
 
 ### The MPL-2.0 components
 

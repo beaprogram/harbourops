@@ -1,5 +1,7 @@
 # Deploying the HarbourOps public demo to Azure
 
+> **The live demo does not use this path.** It runs for free on Render and Supabase ([deployment-render.md](deployment-render.md), decisions §46). This Azure runbook remains a documented, tested alternative that has never been deployed.
+
 This is the runbook for one deployment path:
 - **App Service** (Linux, the repository's container);
 - **Azure Database for PostgreSQL Flexible Server**;

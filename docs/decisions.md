@@ -655,11 +655,12 @@ Method, environment, and every number: [benchmarks/photo-memory](benchmarks/phot
 
 `appsettings.PublicDemo.json` sets `Hosting:RequireSecureConfiguration`. With it set, the app **refuses to start** unless all of these hold:
 
-- Data Protection keys are wrapped by a Key Vault key (an https key URI).
+- Data Protection keys are wrapped by a Key Vault key (an https key URI), or, where Key Vault isn't available, encrypted to a certificate with an RSA private key of at least 2048 bits (§46).
+- The database connection uses `SSL Mode=VerifyFull`.
 - Cookies are always `Secure`.
 - Shared-password demo accounts are off.
 - Migrations do not run at startup.
-- Photo storage is Blob with a managed-identity endpoint and no connection string.
+- Photo storage is Blob with a managed-identity endpoint and no connection string, or a Supabase bucket over https with a server-side secret key that the app never creates itself (§46).
 - No developer credential is used.
 
 A unit test checks the committed file against the guard, with the values that `infra/main.bicep` supplies. Another test shows that the usual test settings are refused. The local Compose and development configurations are untouched and documented as local-only.
@@ -697,6 +698,53 @@ The steps, costs, and teardown are in [deployment.md](deployment.md).
 **The fix.**
 - **Before that retry,** the client asks `/api/auth/me` who is signed in. If it isn't the person the tab is showing, it does **not** retry: it reports `session_changed` and refreshes the tab.
 - **Tabs also tell each other** about sign-in, sign-out, and persona changes over a `BroadcastChannel`, so other tabs refresh even before they try to act.
+
+## 46. Free hosting: Render Free for the container, Supabase Free for PostgreSQL and photos
+
+**Why.** The live demo has to cost nothing. The Azure design (§44) costs about US$36 a month. Render Free runs a Docker image at no cost, and Supabase Free provides PostgreSQL and object storage. Both limits were checked against the providers' documentation on 2026-10-27 ([deployment-render.md](deployment-render.md)).
+
+**What stayed the same.** The application and its stack: React, ASP.NET Core, EF Core, Identity cookies, PostgreSQL, and every authorization and workflow rule.
+- **Not adopted:** Supabase Auth, the Data API, and Supabase's client libraries. Supabase is only a PostgreSQL server and an object store.
+- **Azure stays documented:** the Azure path remains as an alternative.
+
+**What changed, and why each change was necessary:**
+- **Photo storage.** A fourth `IAttachmentStorage` uses Supabase Storage's HTTP API through `HttpClient`, with no new dependency. It follows the same rules as the other adapters:
+  - single-request writes that never overwrite (`x-upsert: false`);
+  - idempotent deletes;
+  - listing only key-named objects;
+  - no public or signed URLs.
+
+  The Storage API reports errors as HTTP 400 with the real status in the body, so both forms are handled. Tests run against Supabase's open-source Storage API server in a container: emulator evidence, like Azurite. `/health/ready` fails if the bucket is ever made public.
+- **Cookie keys.** Without Key Vault or managed identities, new Data Protection keys are encrypted to an X.509 certificate supplied as a Render secret (`ProtectKeysWithCertificate`, built into ASP.NET Core). They are still stored in PostgreSQL. A previous certificate can be supplied during a rotation.
+
+  Measured behaviour: without the right certificate, existing cookies are rejected and a new, encrypted key is created. The cost is one sign-in, never data, and nothing is ever stored in plaintext.
+- **Database version.** Supabase hosts PostgreSQL 17. The schema uses nothing newer than PostgreSQL 12 (a stored generated `tsvector` column and transaction-scoped advisory locks). The whole backend suite passes on 17.11, and CI now runs it on 17 and 18.
+- **Connections and TLS.** Supabase's direct host is IPv6-only unless a paid add-on is bought, and Render doesn't document IPv6 outbound traffic. So the app uses the IPv4 **session pooler**, which keeps prepared statements and session semantics. The pooler's certificate chains to Supabase's own root CA. That root is committed and trusted with `SSL Mode=VerifyFull`, which the hosted guard now requires. The app's pool is capped at 10 connections.
+- **Least privilege on Supabase.**
+  - **Migrations** run as a dedicated `harbourops_owner`, not `postgres`, so the GitHub secret can't touch Supabase's own schemas.
+  - **Supabase's default Data API grants** only cover objects that `postgres` creates, so these tables have no grants to `anon`, `authenticated`, or `service_role`. The Data API is also switched off.
+  - **The app** connects as `harbourops_app`, with row access only.
+  - **Rehearsal:** this was rehearsed on PostgreSQL 17.11 with a non-superuser database owner and Supabase-style default grants. The rehearsal found that `ALTER ROLE … NOSUPERUSER` needs a superuser, so the script no longer restates those defaults.
+- **Resource limits.** At 0.1 CPU and 512 MiB, the hosted photo settings peaked at 473 MiB, and queued uploads waited longer than the edge proxy allows. The free tier therefore uses:
+  - 24 MP images, one decode, and one waiting upload: 307 MiB peak, flat, 9–18 s per accepted upload;
+  - at most 20 sandboxes (≤ 500 MiB of photos, inside Supabase's 1 GB);
+  - 60 sandbox creations an hour.
+
+  All of these are configuration (`render.yaml`), not code.
+- **Release.** `deploy-render.yml` keeps §44's release safety:
+  - manual dispatch, the protected environment, and full CI on the commit;
+  - browser tests on the exact image, then release by digest;
+  - SHA-pinned actions;
+  - waiting for `/health/version`.
+
+  The image goes to GHCR with the run's own token. Render and Supabase offer no OIDC federation, so two environment secrets exist: the migration connection and the service's deploy hook. Both are readable only by the approved job.
+
+**Costs of this choice:**
+- **Sleep:** the service sleeps after 15 idle minutes, and waking takes about a minute.
+- **Pausing:** Supabase pauses after about a week without activity and has to be resumed by hand.
+- **Uploads are slow** at 0.1 CPU.
+- **Secrets replace managed identities:** a Supabase secret key and connection strings live in Render's environment.
+- **Spending can't be capped:** zero cost depends on neither account having a payment method. Overage then suspends instead of billing.
 
 ## Dependency versions
 

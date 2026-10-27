@@ -9,7 +9,9 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
 - `backend/HarbourOps.Tests/`: `Workflow/` (pure unit tests) and `Api/` (integration tests on real PostgreSQL via Testcontainers).
 - `frontend/src/features/<feature>/`: pages, hooks (TanStack Query), and their tests. `src/api/client.ts` is the only HTTP entry point.
 - `e2e/`: Playwright and axe tests against the running Docker Compose stack.
-- `infra/`: Bicep for the hosted demo (not deployed) and the least-privilege database role script. `.github/workflows/deploy.yml` deploys only by manual dispatch into the protected `production` environment.
+- `render.yaml`, `infra/supabase/`, `.github/workflows/deploy-render.yml`: the **free public demo** (Render Free container, Supabase Free PostgreSQL 17 and a private bucket; runbook `docs/deployment-render.md`).
+- `infra/main.bicep`, `infra/sql/`, `.github/workflows/deploy.yml`: the Azure alternative (documented, not deployed).
+- Both deploy workflows run only by manual dispatch into the protected `production` environment.
 - Photos are stored in `Attachments:Storage:LocalPath`: `.data/attachments/` in Development (git-ignored), and the `attachments-data` volume in Compose.
 
 ## Rules that must not be broken
@@ -43,7 +45,10 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
   - Cleanup only runs in `DemoSandboxCleaner`: revoke → lock the sandbox's work orders → delete its stored objects → delete rows → mark cleaned. Keep every step idempotent; never add a public endpoint that deletes data.
 - **Storage deletes must be idempotent** (missing object or directory is success). New `IAttachmentStorage` implementations must never overwrite, never expose public URLs, and must only list objects whose names are storage keys.
 - **Hosted configuration (`appsettings.PublicDemo.json`) is guarded** by `HostingConfiguration.SecureConfigurationProblems`. Don't weaken the guard; extend it when adding anything that must be secure in hosting.
-- **Data Protection:** keys stay in PostgreSQL; never change `DataProtection:ApplicationName` for an existing deployment (it signs everyone out). Never delete keys automatically.
+- **Data Protection:**
+  - Keys stay in PostgreSQL, encrypted at rest by a Key Vault key or, on the free host, a certificate (`DataProtection:CertificateBase64`). Never both.
+  - Never change `DataProtection:ApplicationName` for an existing deployment: it signs everyone out.
+  - Never delete keys automatically.
 - **Logs:** never log the demo credential, cookies, request bodies, or connection strings. Don't enable App Service's `AppServiceHTTPLogs` (it has a Cookie column).
 - **Migrations must be backward compatible with the previous image** (add nullable columns and new tables first). Hosted migrations run as a release step with the migration bundle, never at startup.
 - **CSV cells go through `Csv.Cell`** (formula neutralisation, then RFC 4180 escaping). Never write raw values to an export.
@@ -56,7 +61,15 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
 - **Secrets:** none in git. Local connection strings go in `dotnet user-secrets`; Docker uses `.env` (git-ignored).
 - **Fictional data only:** `.example` emails, invented street names.
 - **No new dependencies** without checking peer and dependency ranges and the licence, then pinning exact versions (`Directory.Packages.props`, exact npm versions), committing lockfiles, and updating `THIRD-PARTY-NOTICES.md` (bundled frontend packages must appear in the generated `third-party-licenses.txt`; native code or NOTICE files go into `/app/licenses` in the `Dockerfile`).
-- **Deployment trust:** the Azure federated credential uses the exact OIDC `sub` printed by `oidc-subject.yml`; never compose it by hand. Actions in jobs that can obtain cloud tokens are pinned to commit SHAs, and releases deploy the tested image by digest.
+- **Deployment trust:**
+  - The Azure federated credential uses the exact OIDC `sub` printed by `oidc-subject.yml`; never compose it by hand.
+  - Actions in jobs that can obtain cloud tokens or deployment secrets are pinned to commit SHAs, and releases deploy the tested image by digest.
+  - On the free host, secrets live only in Render and in the `production` environment; never in `render.yaml` or on a command line.
+- **Supabase:**
+  - Migrations run as `harbourops_owner` and the app as `harbourops_app`, never as `postgres`.
+  - Keep the Data API off, and never grant `anon`, `authenticated`, or `service_role` anything on HarbourOps tables.
+  - Connect through the session pooler with `SSL Mode=VerifyFull` and the committed Supabase root CA.
+- **Free-tier limits** live in `render.yaml` and were measured at 0.1 CPU and 512 MiB (`docs/benchmarks/photo-memory`). Re-measure before raising photo or sandbox limits.
 
 ## Code style
 
@@ -79,7 +92,9 @@ HarbourOps is a maintenance request and dispatch app: React SPA + ASP.NET Core 1
   - Set each page's document title with `usePageTitle`. Dialogs use native `<dialog>` and return focus to their trigger.
   - After anything that changes who is signed in (login, logout, demo start/switch/reset/end): refresh the antiforgery token, drop cached queries, and call `announceSessionChange()`. `apiRequest` must never retry a write as a different person (`session_changed`).
   - Demo tests: backend `DemoSandboxTests` use separate `CookieContainer`s per visitor and `Copy()` to replay retained cookies; frontend demo tests mock `/api/demo/session` (default handler answers 404); e2e demo tests use separate browser contexts and end their sandboxes to free capacity.
-  - Azure Blob tests run against Azurite (`AzuriteFixture`); results are emulator evidence only.
+  - Azure Blob tests run against Azurite (`AzuriteFixture`), and Supabase Storage tests against Supabase's open-source Storage API server (`SupabaseStorageFixture`). Both are emulator evidence only.
+  - The backend suite must pass on PostgreSQL 18 (default) and 17 (`HARBOUROPS_TEST_POSTGRES_IMAGE=postgres:17.11-alpine`, as in CI).
+  - Tests that write certificate-encrypted Data Protection keys use a database of their own, never the shared one.
 
 ## Verification commands (run before calling work done)
 

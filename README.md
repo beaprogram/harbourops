@@ -9,7 +9,7 @@
 
 Every step is checked by the server and recorded in an activity history.
 
-It is a **portfolio project** built to production habits: tested on a real database, documented trade-offs, measured performance, and a prepared (not yet executed) Azure deployment. All organizations, people, addresses, and requests are fictional; every email address uses the reserved `.example` domain.
+It is a **portfolio project** built to production habits: tested on a real database, documented trade-offs, measured performance, a $0 deployment path (Render Free and Supabase Free, being set up), and a prepared Azure alternative. All organizations, people, addresses, and requests are fictional; every email address uses the reserved `.example` domain.
 
 > **Live demo: not deployed yet.** A link will be added here once it is. Until then, the [two-command local run](#try-it-locally) gives you the same "Try the demo" experience.
 
@@ -69,7 +69,7 @@ The local stack also lists shared demo accounts (password `HarbourDemo!2026`) fo
 - **Private photos.**
   - **Checked by content, not by name.**
   - **Rebuilt as clean JPEGs:** every photo is decoded and re-encoded, turned upright, and stripped of EXIF and GPS data.
-  - **Never public:** photos are stored privately (a local directory, or Azure Blob Storage through a managed identity) and served only through endpoints that re-check access on every request.
+  - **Never public:** photos are stored privately (a local directory, Azure Blob Storage through a managed identity, or a private Supabase Storage bucket) and served only through endpoints that re-check access on every request.
 - **Isolated public demo.**
   - **A private sandbox per visitor:** a server-issued credential, personas chosen by key, and a fixed one-hour lifetime enforced on every request.
   - **Limits:** capacity and per-sandbox limits that hold under concurrency.
@@ -98,7 +98,17 @@ The local stack also lists shared demo accounts (password `HarbourDemo!2026`) fo
 - **Measured, not guessed.**
   - **List indexes:** each was justified by query plans on 200,000 rows ([benchmark](docs/benchmarks/list-query-indexes/README.md)).
   - **Photo memory:** profiling found glibc keeping freed image buffers. Two allocator settings cut repeated-load memory from 1.3 GB to about 720 MiB ([benchmark](docs/benchmarks/photo-memory/README.md)).
-- **Secure hosting by default.** The hosted configuration refuses to start without Key Vault-wrapped cookie keys, HTTPS-only cookies, and managed-identity storage. Deployment uses GitHub OIDC (no stored secret), behind a manual trigger and a protected environment ([decisions §41–§44](docs/decisions.md)).
+- **Secure hosting by default.** The hosted configuration refuses to start without:
+  - encrypted cookie keys (Key Vault, or a certificate on the free host);
+  - a fully verified TLS connection to the database;
+  - HTTPS-only cookies;
+  - private photo storage.
+
+  Deployments run only behind a manual trigger and a protected environment ([decisions §41–§46](docs/decisions.md)).
+- **$0 hosting without weakening the app** ([decisions §46](docs/decisions.md)):
+  - Render Free runs the same container, and Supabase Free provides PostgreSQL 17 and a private bucket.
+  - The tables are owned by a dedicated role, so Supabase's API roles have no grants to them.
+  - The photo limits were re-measured at 0.1 CPU and 512 MiB.
 
 ## Verification evidence (2026-10-27)
 
@@ -171,7 +181,7 @@ cd frontend && npm ci && npm run dev
 
 **Browser test sessions.** Shared sessions are created once through the real login form (global setup), so the production sign-in rate limit is never relaxed for tests. Demo tests use separate browser contexts, like separate visitors.
 
-**CI.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs every check above, plus a Bicep build, on each push and pull request, with no deployment credentials. [`deploy.yml`](.github/workflows/deploy.yml) deploys only when started by hand and approved in the protected `production` environment. Neither has run yet.
+**CI.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs every check above, plus a Bicep build, on each push and pull request, with no deployment credentials. [`deploy-render.yml`](.github/workflows/deploy-render.yml) (the free demo) and [`deploy.yml`](.github/workflows/deploy.yml) (Azure, not used) deploy only when started by hand and approved in the protected `production` environment.
 
 ## API at a glance
 
@@ -208,11 +218,12 @@ All endpoints are under `/api`. Errors are [Problem Details](https://www.rfc-edi
 ```
 backend/HarbourOps.Api/      ASP.NET Core app (API + built SPA), one folder per feature under Features/
   Features/Demo/Sandbox/     Per-visitor demo sandboxes: credential, personas, limits, cleanup
-  Features/Attachments/      Photo processing, private storage (local or Azure Blob), reconciler
+  Features/Attachments/      Photo processing, private storage (local, Azure Blob, or Supabase), reconciler
 backend/HarbourOps.Tests/    xUnit unit tests (Workflow/) and integration tests on PostgreSQL/Azurite (Api/)
 frontend/                    React + Vite app
 e2e/                         Playwright browser, accessibility, and image-processing tests
-infra/                       Bicep templates and the database role script (not deployed)
+infra/                       Supabase role scripts (free demo); Bicep and its role script (Azure, not deployed)
+render.yaml                  Render Blueprint for the free demo
 docs/                        Architecture, decisions, deployment runbook, accessibility, benchmarks, portfolio notes
 .github/workflows/           CI (every push and PR) and manual deployment
 ```
@@ -225,9 +236,10 @@ docs/                        Architecture, decisions, deployment runbook, access
   - [Interview notes](docs/interview-notes.md)
 - **Design:**
   - [Architecture](docs/architecture.md)
-  - [Decisions and trade-offs](docs/decisions.md), 45 entries, each with its cost
+  - [Decisions and trade-offs](docs/decisions.md), 46 entries, each with its cost
 - **Operations:**
-  - [Deployment runbook and cost estimate](docs/deployment.md)
+  - [Free deployment runbook: Render + Supabase](docs/deployment-render.md)
+  - [Azure deployment runbook and cost estimate](docs/deployment.md) (alternative, not deployed)
   - [Release checklist](docs/release-checklist.md)
   - [Roadmap and known limitations](docs/roadmap.md)
 - **Evidence:**

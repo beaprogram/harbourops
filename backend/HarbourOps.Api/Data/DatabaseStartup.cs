@@ -51,12 +51,14 @@ public static class DatabaseStartup
                 .Select(k => k.Xml)
                 .ToListAsync();
             var unencrypted = keys.Count(xml => xml is not null && !xml.Contains("<encryptedSecret", StringComparison.Ordinal));
-            var keyVault = !string.IsNullOrWhiteSpace(
-                services.GetRequiredService<IConfiguration>()[$"{KeyProtectionOptions.SectionName}:KeyVaultKeyUri"]);
-            if (keyVault && unencrypted > 0)
+            var configuration = services.GetRequiredService<IConfiguration>();
+            var protectedKeys =
+                !string.IsNullOrWhiteSpace(configuration[$"{KeyProtectionOptions.SectionName}:KeyVaultKeyUri"]) ||
+                !string.IsNullOrWhiteSpace(configuration[$"{KeyProtectionOptions.SectionName}:CertificateBase64"]);
+            if (protectedKeys && unencrypted > 0)
             {
                 logger.LogWarning(
-                    "Data Protection key ring: {KeyCount} keys, {UnencryptedCount} created before Key Vault protection and stored unencrypted. " +
+                    "Data Protection key ring: {KeyCount} keys, {UnencryptedCount} created before key protection was enabled and stored unencrypted. " +
                     "They are kept so existing sessions stay valid; retire them as described in docs/deployment.md once they have expired.",
                     keys.Count, unencrypted);
             }

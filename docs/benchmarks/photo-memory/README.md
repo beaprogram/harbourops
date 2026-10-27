@@ -114,6 +114,29 @@ This Mac has no x64 hardware, so the x64 build was checked under QEMU user-mode 
 
 **Not representative:** memory (961 MiB peak) and timing (12–53 s per upload) include the emulator and must not be used for sizing. **Native x64 verification** is the CI `e2e` job: the image runs as `linux/amd64` on an x64 runner, and `photo-processing.spec.ts` checks orientation and metadata removal there. It passed on 2026-10-27 ([run 40544241970](https://github.com/beaprogram/harbourops/actions/runs/40544241970)): the runner reported `x86_64`, the image `linux/amd64`, and both photo specs passed. That run checks correctness, not memory: x64 memory on Azure is still to be watched (release checklist, item 6).
 
+## Render Free limits (0.1 CPU, 512 MiB)
+
+The free public demo runs on a Render Free instance ([deployment-render.md](../../deployment-render.md)). The same harness was rerun on 2026-10-27 with the app container limited to **0.1 CPU and 512 MiB** (`HM_CPUS=0.1 HM_MEM=512m`). It used the image built from this repository that morning (arm64, the same `/app`; the photo code is unchanged since). The scenario was `sustained` with two readers.
+
+| Run | Rounds | `memory.peak` | Anonymous memory after each round | Uploads per round | Slowest accepted upload | Readers |
+| --- | --- | --- | --- | --- | --- | --- |
+| 40 MP, 1 decode, 4 waiting (the Azure hosted setting) | 1 | 353 MiB | 75 MiB | 15 created, 3 `uploads_busy` | 35 s | 286 requests, 0 errors |
+| Same | 3 | **473 MiB** | 82, 139, 157 MiB | 15 created, 3 `uploads_busy` | **471 s** (round 3) | 502 requests, 0 errors |
+| **24 MP, 1 decode, 1 waiting** (`render.yaml`) | 3 | **307 MiB** | 64, 70, 58 MiB | 6 created, 12 `uploads_busy` | **17.5 s** | 0 errors |
+
+No run recorded an OOM event or reached `memory.max`.
+
+**Why the free tier uses 24 MP and one waiting upload:**
+- **Memory.** At 0.1 CPU, 40 MP decodes take long enough that memory built up across rounds, to within 39 MiB of the limit.
+- **Waiting time.** Queued uploads waited minutes. That is longer than an edge proxy keeps a request open, so a visitor would get an error while the photo was still saved.
+- **The 24 MP setting:** one decode costs 96 MB of pixels instead of 160 MB. Memory stayed flat, and anyone beyond one waiting upload is told at once to retry.
+
+**Inputs:** `make_images.py <dir> 24` writes the same files at 24 MP: 6000 × 4000 and 10000 × 2400 PNGs, and a 6000 × 4000 JPEG of 3.45 MiB. `Attachments__MaxPixels=24000000` was set through `HM_ENVFILE`. The container's settings were confirmed with `docker inspect`.
+
+**Limits of this evidence:**
+- **Architecture:** these are arm64 runs on a laptop; Render runs `linux/amd64` on its own hardware.
+- **What to watch:** the hosted check is Render's memory metric during the hosted smoke test.
+
 ## Reproducing
 
 ```bash
@@ -123,6 +146,10 @@ python3 -I make_images.py /tmp/harbourops-photo-memory/img          # macOS (use
 HM_ARCH=arm64 docker compose -f compose.yml up -d --build             # throwaway project "hm-arm64"
 HM_ARCH=arm64 HM_PORT=8099 HM_CPUS=1 HM_MEM=1750m HM_PROC=2 HM_REPEAT=8 ./measure.sh final-x8 sustained
 HM_ARCH=arm64 HM_PORT=8099 HM_ENVFILE=env/arena2.env HM_REPEAT=5 ./measure.sh arena2-x5 sustained   # a variant
+# Render Free limits, 24 MP setting (limits.env holds one line: Attachments__MaxPixels=24000000):
+python3 -I make_images.py /tmp/harbourops-photo-memory-24/img 24
+HM_ARCH=arm64 HM_PORT=8099 HM_CPUS=0.1 HM_MEM=512m HM_PROC=1 HM_QUEUE=1 HM_REPEAT=3 HM_WORK=/tmp/harbourops-photo-memory-24 \
+  HM_ENVFILE=/path/to/limits.env ./measure.sh render-24mp sustained
 HM_ARCH=arm64 docker compose -f compose.yml down -v                   # remove the throwaway stack
 ```
 

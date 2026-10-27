@@ -1,11 +1,18 @@
-"""Builds the measurement and smoke-test images: python3 -I make_images.py <output directory>
+"""Builds the measurement and smoke-test images: python3 -I make_images.py <output directory> [max megapixels]
 
 Standard library plus macOS `sips` for JPEG encoding (so it runs on macOS as written). Produces images at the
 configured limits: 40 MP PNGs (the most expensive decode), a 40 MP JPEG just under 5 MiB (the largest body),
 a 12 MP phone-sized JPEG, and small EXIF/GPS, transparent, and deceptive files for the smoke test.
+
+The optional second argument sets the largest-image size for a lower Attachments:MaxPixels (24 for the Render Free
+run: 6000 x 4000 and 10000 x 2400). File names keep "40mp" because harness.mjs reads them by name.
 """
 import struct, zlib, random, subprocess, sys, os
 out = sys.argv[1]
+max_mp = int(sys.argv[2]) if len(sys.argv) > 2 else 40
+# Largest image: 8000 x 5000 at 40 MP, 6000 x 4000 at 24 MP. Longest-edge image: 10000 wide at the same pixel count.
+big_w, big_h = {40: (8000, 5000), 24: (6000, 4000)}[max_mp]
+edge_h = max_mp * 1_000_000 // 10000
 
 def png(path, w, h, row_fn, alpha=False):
     def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
@@ -35,8 +42,8 @@ def jpeg_from_png(src, dst, quality):
     return os.path.getsize(dst)
 
 sizes = {}
-sizes['max-40mp.png'] = png(f'{out}/max-40mp.png', 8000, 5000, gradient_rows(8000, 5000))
-sizes['max-edge-10000x4000.png'] = png(f'{out}/max-edge-10000x4000.png', 10000, 4000, gradient_rows(10000, 4000))
+sizes['max-40mp.png'] = png(f'{out}/max-40mp.png', big_w, big_h, gradient_rows(big_w, big_h))
+sizes['max-edge-10000x4000.png'] = png(f'{out}/max-edge-10000x4000.png', 10000, edge_h, gradient_rows(10000, edge_h))
 sizes['max-40mp.jpg'] = jpeg_from_png(f'{out}/max-40mp.png', f'{out}/max-40mp.jpg', 80)
 
 # A "phone photo": 4032x3024 with mild texture so JPEG size is realistic (a few MB).
@@ -75,7 +82,7 @@ w, h = 1000, 625
 raw = b''.join(b'\x00' + random.randbytes(3 * w) for _ in range(h))
 def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
 open(f'{out}/noise-small.png', 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw, 6)) + chunk(b'IEND', b''))
-subprocess.run(['sips', '-z', '5000', '8000', f'{out}/noise-small.png', '--out', f'{out}/noise-40mp.png'], check=True, capture_output=True)
+subprocess.run(['sips', '-z', str(big_h), str(big_w), f'{out}/noise-small.png', '--out', f'{out}/noise-40mp.png'], check=True, capture_output=True)
 sizes['max-40mp-5mib.jpg'] = jpeg_from_png(f'{out}/noise-40mp.png', f'{out}/max-40mp-5mib.jpg', 30)
 for name in ('noise-small.png', 'noise-40mp.png'):
     os.remove(f'{out}/{name}')

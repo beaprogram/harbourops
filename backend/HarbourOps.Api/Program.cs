@@ -78,13 +78,18 @@ builder.Services.AddScoped<WorkOrderService>();
 builder.Services.AddScoped<DashboardService>();
 builder.Services.AddScoped<CommentService>();
 builder.Services.AddScoped<WorkOrderExportService>();
-// Photo attachments: a private local directory, or a private Azure Blob container (managed identity).
+// Photo attachments: a private local directory, a private Azure Blob container (managed identity), or a private
+// Supabase Storage bucket (server-side secret key).
 builder.Services.AddSingleton<IAttachmentStorage>(services =>
 {
     var storage = services.GetRequiredService<IOptions<AttachmentOptions>>().Value.Storage;
-    return storage.Provider == AttachmentStorageOptions.AzureBlobProvider
-        ? AzureBlobAttachmentStorage.Create(storage.AzureBlob, () => services.GetRequiredService<IOptions<AzureOptions>>().Value.CreateCredential())
-        : ActivatorUtilities.CreateInstance<LocalFileAttachmentStorage>(services);
+    return storage.Provider switch
+    {
+        AttachmentStorageOptions.AzureBlobProvider => AzureBlobAttachmentStorage.Create(
+            storage.AzureBlob, () => services.GetRequiredService<IOptions<AzureOptions>>().Value.CreateCredential()),
+        AttachmentStorageOptions.SupabaseProvider => SupabaseStorageAttachmentStorage.Create(storage.Supabase),
+        _ => ActivatorUtilities.CreateInstance<LocalFileAttachmentStorage>(services),
+    };
 });
 builder.Services.AddSingleton<PhotoProcessor>();
 builder.Services.AddSingleton<UploadAdmission>();
