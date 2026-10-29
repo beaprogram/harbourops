@@ -111,6 +111,7 @@ jobs:
           ConnectionStrings__Default: Host=localhost;Database=design_time_only # design time only; never connects
         run: |
           dotnet tool restore
+          dotnet restore backend/HarbourOps.Api --locked-mode -r linux-x64
           dotnet ef migrations bundle --project backend/HarbourOps.Api --configuration Release \
             --self-contained -r linux-x64 -o efbundle --force
 
@@ -159,3 +160,4 @@ jobs:
           done
           echo "The new version did not become ready. Roll back to the previous digest (docs/deployment-render.md, rollback)."
           exit 1
+
