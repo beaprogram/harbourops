@@ -35,6 +35,8 @@ ARG SOURCE_VERSION=local
 WORKDIR /app
 COPY --from=backend /app ./
 COPY --from=frontend /src/frontend/dist ./wwwroot
+# Public Supabase CA used by SSL Mode=VerifyFull; no private keys are included.
+COPY infra/supabase/supabase-root-2021-ca.crt ./certs/supabase-root-2021-ca.crt
 # Owned by the non-root "app" user (uid 1654). A new named volume mounted here inherits this ownership.
 COPY --from=backend --chown=1654:1654 /photo-storage /var/lib/harbourops/attachments
 # glibc allocator settings for SkiaSharp's large native pixel buffers. With the defaults, freed multi-megabyte
@@ -50,3 +52,4 @@ ENV ASPNETCORE_HTTP_PORTS=8080 \
 EXPOSE 8080
 USER app
 ENTRYPOINT ["dotnet", "HarbourOps.Api.dll"]
+
